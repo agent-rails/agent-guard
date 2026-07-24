@@ -196,6 +196,73 @@ def broker_mint(result, args):
     )
 
 
+def _iter_rules(policy):
+    """Yield (module_name_or_None, Rule) from either Policy or CompiledPolicy."""
+    rules = getattr(policy, "rules", None)
+    if rules is not None:
+        for rule in rules:
+            yield None, rule
+        return
+    ordered = getattr(policy, "ordered", None)
+    if ordered is not None:
+        for module, rule in ordered:
+            yield module.name, rule
+        return
+    raise TypeError(f"unsupported policy type: {type(policy)!r}")
+
+
+def _rules(args) -> int:
+    """List policy rules so operators can see what `guard run` will enforce."""
+    if args.policy:
+        policy = load_policy(args.policy)
+        source = args.policy
+    elif args.bundled:
+        policy = with_bundled(default=Decision.ALLOW).compile()
+        source = "bundled modules (same family as `guard mcp` defaults)"
+    else:
+        policy = _default_policy()
+        source = "built-in defaults (same as `guard run` without --policy)"
+
+    entries = list(_iter_rules(policy))
+
+    if args.json:
+        import json
+
+        payload = {
+            "source": source,
+            "default": policy.default.value,
+            "rules": [
+                {
+                    "id": rule.id,
+                    "decision": rule.decision.value,
+                    "tools": list(rule.tools),
+                    "arg_patterns": list(rule.arg_patterns),
+                    "reason": rule.reason,
+                    **({"module": module} if module else {}),
+                }
+                for module, rule in entries
+            ],
+        }
+        print(json.dumps(payload, indent=2))
+        return 0
+
+    print(f"policy source: {source}")
+    print(f"default decision: {policy.default.value}")
+    print(f"rules ({len(entries)}):")
+    if not entries:
+        print("  (none)")
+        return 0
+    for module, rule in entries:
+        tools = ", ".join(rule.tools)
+        patterns = "; ".join(rule.arg_patterns) if rule.arg_patterns else "(any args)"
+        reason = rule.reason or "(no reason)"
+        label = f"{module}/{rule.id}" if module else rule.id
+        print(f"  [{rule.decision.value:14}] {label}")
+        print(f"      tools:    {tools}")
+        print(f"      patterns: {patterns}")
+        print(f"      reason:   {reason}")
+    return 0
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="guard", description="Run a command in a governed sandbox.")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -222,6 +289,22 @@ def build_parser() -> argparse.ArgumentParser:
     mcp.add_argument("--agent-id", default="mcp-agent")
     mcp.add_argument("server", nargs=argparse.REMAINDER, help="-- <mcp-server command>")
     mcp.set_defaults(func=_mcp)
+
+    rules = sub.add_parser(
+        "rules",
+        help="list policy rules (built-in defaults, bundled modules, or a policy file)",
+    )
+    rules.add_argument(
+        "--policy",
+        help="policy file (yaml/json); if omitted, show built-in `guard run` defaults",
+    )
+    rules.add_argument(
+        "--bundled",
+        action="store_true",
+        help="show the bundled module pack (closer to `guard mcp` defaults)",
+    )
+    rules.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    rules.set_defaults(func=_rules)
     return parser
 
 
