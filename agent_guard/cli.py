@@ -263,6 +263,82 @@ def _rules(args) -> int:
         print(f"      reason:   {reason}")
     return 0
 
+
+def _resolve_policy(args) -> Policy:
+    if getattr(args, "policy", None):
+        return load_policy(args.policy)
+    return _default_policy()
+
+
+def _explain(args) -> int:
+    """Show *which rule* matched a tool call and why — no execution.
+
+    Complements a dry-run allow/deny: explain is for policy authors who need
+    the first-match story (tool glob, arg regex that hit, rules skipped).
+
+    Exit codes mirror severity for scripting:
+      0 allow (or default allow)
+      3 deny
+      4 require_human
+      1 usage error
+    """
+    import json
+
+    command = [c for c in (args.command or []) if c != "--"]
+    if not command:
+        print("nothing to explain; usage: guard explain -- <command>", file=sys.stderr)
+        return 1
+
+    tool = args.tool
+    if tool == "shell":
+        tool_args = {"cmd": " ".join(command)}
+    else:
+        tool_args = {"cmd": " ".join(command)} if command else {}
+
+    policy = _resolve_policy(args)
+    detail = policy.explain(tool, tool_args, args.trust_tier)
+
+    if args.json:
+        print(json.dumps(detail, indent=2))
+    else:
+        print(f"explain: {tool} {json.dumps(tool_args, sort_keys=True)}")
+        print(f"decision: {detail['verdict']['decision']}")
+        if detail["matched"] and detail["rule"]:
+            rule = detail["rule"]
+            print(f"matched_rule: {rule['id']} (#{rule['index']})")
+            print(f"tool_globs: {', '.join(rule['tools'])}")
+            if rule["matched_arg_patterns"]:
+                print("matched_patterns:")
+                for pat in rule["matched_arg_patterns"]:
+                    print(f"  - {pat}")
+            elif not rule["arg_patterns"]:
+                print("matched_patterns: (none — tool-only rule)")
+            if rule.get("reason"):
+                print(f"reason: {rule['reason']}")
+        else:
+            print(f"matched_rule: (none — policy default '{detail['default']}')")
+            print(f"reason: {detail['verdict']['reason']}")
+        skipped = detail.get("skipped_before") or []
+        if skipped and args.verbose:
+            print(f"skipped_before: {len(skipped)}")
+            for s in skipped:
+                print(f"  - {s['id']}: {s['why_skipped']}")
+        dec = detail["verdict"]["decision"]
+        if dec == "allow":
+            print("would_execute: yes")
+        elif dec == "deny":
+            print("would_execute: no (blocked)")
+        else:
+            print("would_execute: no (needs human approval)")
+
+    dec = detail["verdict"]["decision"]
+    if dec == "allow":
+        return 0
+    if dec == "deny":
+        return 3
+    return 4
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="guard", description="Run a command in a governed sandbox.")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -305,6 +381,35 @@ def build_parser() -> argparse.ArgumentParser:
     )
     rules.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     rules.set_defaults(func=_rules)
+
+    explain = sub.add_parser(
+        "explain",
+        help="show which policy rule matches a command (no execution)",
+    )
+    explain.add_argument(
+        "--policy",
+        help="policy file (yaml/json); default is the same built-in policy as `guard run`",
+    )
+    explain.add_argument(
+        "--tool",
+        default="shell",
+        help="tool name to evaluate (default: shell)",
+    )
+    explain.add_argument(
+        "--trust-tier",
+        default="local.process",
+        help="caller trust tier used for min_trust_tier rules (default: local.process)",
+    )
+    explain.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    explain.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="list rules skipped before the match",
+    )
+    explain.add_argument("command", nargs=argparse.REMAINDER, help="-- command to explain")
+    explain.set_defaults(func=_explain)
+
     return parser
 
 
