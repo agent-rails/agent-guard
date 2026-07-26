@@ -95,6 +95,20 @@ def _default_policy() -> Policy:
                     "arg_patterns": [r"\b(shutdown|reboot|halt|poweroff)\b"],
                     "reason": "host power state change",
                 },
+                {
+                    "id": "block-iptables-flush",
+                    "decision": "deny",
+                    "tools": ["shell"],
+                    "arg_patterns": [r"iptables\s+(-F\b|--flush\b)"],
+                    "reason": "flushing firewall rules disables network policy",
+                },
+                {
+                    "id": "block-nft-flush",
+                    "decision": "deny",
+                    "tools": ["shell"],
+                    "arg_patterns": [r"nft\s+flush\s+ruleset\b"],
+                    "reason": "flushing nftables ruleset disables network policy",
+                },
             ],
         }
     )
