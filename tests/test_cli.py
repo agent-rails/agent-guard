@@ -78,3 +78,32 @@ def test_iptables_flush_is_blocked_via_cli():
 def test_nft_flush_ruleset_is_blocked_via_cli():
     code = main(["run", "--dev-trust-runtime", "--", "nft", "flush", "ruleset"])
     assert code == 3
+
+
+def test_rules_lists_default_policy(capsys):
+    code = main(["rules"])
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "block-rm-rf" in out
+    assert "gate-force-push" in out
+    assert "default decision: allow" in out
+
+
+def test_rules_json_shape(capsys):
+    import json
+
+    code = main(["rules", "--json"])
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["default"] == "allow"
+    ids = {rule["id"] for rule in payload["rules"]}
+    assert "block-rm-rf" in ids
+    assert "gate-kubectl-delete" in ids
+
+
+def test_rules_bundled_has_module_rules(capsys):
+    code = main(["rules", "--bundled"])
+    assert code == 0
+    out = capsys.readouterr().out
+    # bundled pack uses module-prefixed ids
+    assert "shell-rm-rf" in out or "recursive force delete" in out
