@@ -58,9 +58,7 @@ class Policy:
                 return verdict_for_rule(rule, tool, trust_tier)
         return Verdict(decision=self.default, reason="no rule matched; policy default")
 
-    def explain(
-        self, tool: str, args: dict[str, Any], trust_tier: str = TRUST_TIERS[0]
-    ) -> dict[str, Any]:
+    def explain(self, tool: str, args: dict[str, Any], trust_tier: str = TRUST_TIERS[0]) -> dict[str, Any]:
         """First-match explanation for humans and CI.
 
         Unlike ``evaluate``, this returns *why* a rule won: which tool
@@ -84,9 +82,7 @@ class Policy:
                 continue
             matched_patterns: list[str] = []
             if rule.arg_patterns:
-                matched_patterns = [
-                    pat for pat in rule.arg_patterns if re.search(pat, rendered_args)
-                ]
+                matched_patterns = [pat for pat in rule.arg_patterns if re.search(pat, rendered_args)]
                 if not matched_patterns:
                     skipped.append(
                         {

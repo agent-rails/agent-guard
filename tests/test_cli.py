@@ -128,8 +128,8 @@ def test_explain_allowed_echo(capsys):
 
 def test_explain_json_shape():
     import json
-    from io import StringIO
     import sys
+    from io import StringIO
 
     buf = StringIO()
     old = sys.stdout

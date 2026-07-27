@@ -47,14 +47,15 @@ from agent_guard import guarded, Guard, with_bundled, Decision, MemoryAuditSink
 
 guard = Guard(with_bundled(default=Decision.ALLOW).compile(), audit=MemoryAuditSink(), agent_id="agent-1")
 
+
 @guarded(guard, "run_sql")
-def run_sql(query: str) -> list: ...   # raises BlockedError if policy denies
+def run_sql(query: str) -> list: ...  # raises BlockedError if policy denies
 ```
 
 3. Wrap your dispatch seam — for any custom loop / framework.
 
 ```python
-guarded_dispatch = guard.wrap(my_dispatch)   # my_dispatch(tool, args) -> result
+guarded_dispatch = guard.wrap(my_dispatch)  # my_dispatch(tool, args) -> result
 ```
 
 All three share one policy engine, one audit trail, one decision logic. Start with the bundled policy (`rm -rf`, `DROP TABLE`, `kubectl delete`, ... gated out of the box), tighten from there.
@@ -66,21 +67,33 @@ Copy-paste runnable MCP walkthrough: [`examples/mcp/`](examples/mcp/) — a poli
 ```python
 from agent_guard import Guard, Policy, JsonlAuditSink
 
-policy = Policy.from_dict({
-    "default": "allow",
-    "rules": [
-        {"id": "no-drop", "decision": "deny", "tools": ["sql"],
-         "arg_patterns": [r"(?i)\bdrop\s+table\b"], "reason": "no destructive sql"},
-        {"id": "gate-force-push", "decision": "require_human", "tools": ["git", "shell"],
-         "arg_patterns": [r"git\s+push\b.*--force"], "reason": "force-push needs a human"},
-    ],
-})
+policy = Policy.from_dict(
+    {
+        "default": "allow",
+        "rules": [
+            {
+                "id": "no-drop",
+                "decision": "deny",
+                "tools": ["sql"],
+                "arg_patterns": [r"(?i)\bdrop\s+table\b"],
+                "reason": "no destructive sql",
+            },
+            {
+                "id": "gate-force-push",
+                "decision": "require_human",
+                "tools": ["git", "shell"],
+                "arg_patterns": [r"git\s+push\b.*--force"],
+                "reason": "force-push needs a human",
+            },
+        ],
+    }
+)
 
 guard = Guard(policy, audit=JsonlAuditSink("audit.jsonl"), agent_id="agent-42")
 
 # wrap whatever your harness already calls to run a tool:
 guarded = guard.wrap(my_dispatch)
-guarded("sql", {"query": "SELECT 1"})          # runs, audited
+guarded("sql", {"query": "SELECT 1"})  # runs, audited
 guarded("sql", {"query": "DROP TABLE users"})  # raises BlockedError, audited, never executed
 ```
 
@@ -106,11 +119,22 @@ One flat file doesn't scale to many tools, teams, and MCP servers. Compose inste
 ```python
 from agent_guard import PolicyRegistry, PolicyModule, Decision, Guard, JsonlAuditSink
 
-org = PolicyModule.from_dict({"name": "org-base", "namespace": "*", "layer": 100,
-    "rules": [{"id": "no-drop", "decision": "deny", "tools": ["sql"],
-               "arg_patterns": [r"(?i)drop table"]}]})
-sql = PolicyModule.from_dict({"name": "sql-defaults", "namespace": "sql*", "layer": 0,
-    "rules": [{"id": "reads-ok", "decision": "allow", "tools": ["sql"]}]})
+org = PolicyModule.from_dict(
+    {
+        "name": "org-base",
+        "namespace": "*",
+        "layer": 100,
+        "rules": [{"id": "no-drop", "decision": "deny", "tools": ["sql"], "arg_patterns": [r"(?i)drop table"]}],
+    }
+)
+sql = PolicyModule.from_dict(
+    {
+        "name": "sql-defaults",
+        "namespace": "sql*",
+        "layer": 0,
+        "rules": [{"id": "reads-ok", "decision": "allow", "tools": ["sql"]}],
+    }
+)
 
 compiled = PolicyRegistry(default=Decision.DENY).register(org).register(sql).compile()
 guard = Guard(compiled, audit=JsonlAuditSink("audit.jsonl"), agent_id="agent-42")
@@ -123,7 +147,9 @@ Batteries-included modules for common tool surfaces (`shell`, `git`, `postgres`,
 ```python
 from agent_guard import with_bundled, Decision
 
-compiled = with_bundled(default=Decision.ALLOW).compile()   # rm -rf, DROP TABLE, kubectl delete, ... gated out of the box
+compiled = with_bundled(
+    default=Decision.ALLOW
+).compile()  # rm -rf, DROP TABLE, kubectl delete, ... gated out of the box
 ```
 
 Layer your org overrides on top with a higher `layer`. Contribute a module for your favorite MCP server — see the open issues.
@@ -135,9 +161,11 @@ Some decisions the heuristic can't make. A rule can opt into a judge — consult
 ```python
 from agent_guard import Guard, LLMJudge
 
+
 # bring any model — wire a different vendor than the agent for real diversity
 def complete(prompt: str) -> str:
-    return my_llm_client.complete(prompt)   # anthropic / openai / local — your call
+    return my_llm_client.complete(prompt)  # anthropic / openai / local — your call
+
 
 guard = Guard(compiled, audit=sink, agent_id="a", judge=LLMJudge(complete))
 ```
