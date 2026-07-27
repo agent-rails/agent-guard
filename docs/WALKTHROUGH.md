@@ -103,8 +103,8 @@ policy = Policy.from_dict(
 )
 guard = Guard(policy, audit=JsonlAuditSink("audit.jsonl"), agent_id="agent-42")
 guarded = guard.wrap(my_dispatch)  # wrap whatever runs a tool in your harness
-guarded("sql", {"query": "SELECT 1"})           # runs, audited
-guarded("sql", {"query": "DROP TABLE users"})   # raises BlockedError, never executes
+guarded("sql", {"query": "SELECT 1"})  # runs, audited
+guarded("sql", {"query": "DROP TABLE users"})  # raises BlockedError, never executes
 ```
 
 CLI:
@@ -127,9 +127,7 @@ gVisor isolation tier (needs docker + gVisor `runsc`):
 ```python
 from identity import ContainerRuntime, RuntimeSpec
 
-sbx = ContainerRuntime().spawn(
-    RuntimeSpec(kind="remote.gvisor", runtime="runsc", image="busybox", network=False)
-)
+sbx = ContainerRuntime().spawn(RuntimeSpec(kind="remote.gvisor", runtime="runsc", image="busybox", network=False))
 sbx.attest().runtime_kind  # 'remote.gvisor' only if runsc actually ran, else spawn raised
 ```
 
