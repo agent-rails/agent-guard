@@ -184,6 +184,17 @@ Fenced, on purpose:
 - Capability = what policy permits, not what the prompt says. Enforcement is code, not instruction.
 - Cross-harness. The wrapped seam is a plain callable, so the same guard fits a raw loop, MCP, or native function-calling.
 
+## Scaffold a starter policy (`guard init`)
+
+```bash
+guard init                         # writes ./policy.yaml (refuses to overwrite)
+guard init policies/agent.yaml     # custom path
+guard init --force policy.json     # JSON form; --force replaces an existing file
+guard rules --policy policy.yaml   # inspect what you just wrote
+```
+
+The starter matches `policy.example.yaml` (deny `DROP TABLE` / `rm -rf`, gate force-push and prod writes, tier-gate deploys). Edit it, then pass `--policy` to `guard run` / `guard explain` / `guard rules`.
+
 ## Run a command in a governed sandbox (`guard run`)
 
 Governed terminal execution — spawn a sandbox, mint a scoped identity, run a command through the guard, audit it:

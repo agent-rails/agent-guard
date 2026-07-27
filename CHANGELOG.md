@@ -4,6 +4,9 @@ Notable changes. This project follows [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- CLI: `guard init` writes a starter policy file (YAML or JSON), refuses overwrite
+  without `--force`, and loads the file after write so a broken starter never ships.
+
 ## [0.0.1]
 
 Initial release.

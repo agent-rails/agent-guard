@@ -339,6 +339,128 @@ def _explain(args) -> int:
     return 4
 
 
+# Starter policy for `guard init`. Dict form is the source of truth; YAML/JSON
+# serializers derive from it so an installed wheel works without package data.
+_STARTER_POLICY: dict = {
+    "default": "allow",
+    "rules": [
+        {
+            "id": "block-sql-drop",
+            "decision": "deny",
+            "tools": ["sql", "db_*"],
+            "arg_patterns": [r"(?i)\bdrop\s+table\b", r"(?i)\btruncate\b"],
+            "reason": "destructive SQL is never allowed for an agent",
+        },
+        {
+            "id": "block-rm-rf",
+            "decision": "deny",
+            "tools": ["shell", "bash", "exec"],
+            "arg_patterns": [r"\brm\s+-rf\b", r"\brm\s+-fr\b"],
+            "reason": "recursive force delete is blocked",
+        },
+        {
+            "id": "gate-force-push",
+            "decision": "require_human",
+            "tools": ["shell", "bash", "git"],
+            "arg_patterns": [r"git\s+push\b.*--force", r"git\s+push\b.*-f\b"],
+            "reason": "force-push rewrites shared history; a human must approve",
+        },
+        {
+            "id": "gate-prod-writes",
+            "decision": "require_human",
+            "tools": ["http_*", "api_*"],
+            "arg_patterns": ["(?i)prod", "(?i)production"],
+            "reason": "writes to production surfaces require a human gate",
+        },
+        {
+            "id": "prod-write-needs-attested-runtime",
+            "decision": "allow",
+            "tools": ["prod_write", "deploy"],
+            "min_trust_tier": "remote.microvm",
+            "reason": (
+                "high-authority tools only from a hardware-attested runtime; local identities cannot self-elevate"
+            ),
+        },
+    ],
+}
+
+_INIT_HEADER = """\
+# agent-guard starter policy — edit freely, then:
+#   guard rules --policy <this-file>
+#   guard explain --policy <this-file> -- rm -rf /tmp/x
+#   guard run --policy <this-file> --dev-trust-runtime -- echo hi
+#
+# First matching rule wins. default is required (no silent fallback).
+
+"""
+
+
+def _render_starter(path_suffix: str) -> str:
+    """Serialize `_STARTER_POLICY` to YAML or JSON text."""
+    import json
+
+    if path_suffix == ".json":
+        return json.dumps(_STARTER_POLICY, indent=2) + "\n"
+    try:
+        import yaml
+    except ImportError as err:
+        raise ImportError("PyYAML is required to write .yaml policies; `pip install pyyaml` or use .json") from err
+    # default_flow_style=False keeps lists readable like policy.example.yaml
+    body = yaml.safe_dump(_STARTER_POLICY, sort_keys=False, default_flow_style=False)
+    return _INIT_HEADER + body
+
+
+def _init(args) -> int:
+    """Write a starter policy file operators can edit and pass to --policy.
+
+    Refuses to overwrite an existing path unless ``--force``. After write,
+    loads the file through ``load_policy`` so a broken starter never ships.
+    """
+    from pathlib import Path
+
+    path = Path(args.path)
+    suffix = path.suffix.lower()
+    if suffix == "":
+        path = path.with_suffix(".yaml")
+        suffix = ".yaml"
+    if suffix not in {".yaml", ".yml", ".json"}:
+        print(
+            f"unsupported policy extension {suffix!r}; use .yaml, .yml, or .json",
+            file=sys.stderr,
+        )
+        return 1
+
+    if path.exists() and not args.force:
+        print(
+            f"refusing to overwrite existing {path}; pass --force to replace",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        body = _render_starter(suffix if suffix != ".yml" else ".yaml")
+    except ImportError as err:
+        print(str(err), file=sys.stderr)
+        return 1
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+
+    try:
+        policy = load_policy(path)
+    except Exception as err:  # noqa: BLE001 — surface any loader failure
+        path.unlink(missing_ok=True)
+        print(f"wrote then failed to load starter policy: {err}", file=sys.stderr)
+        return 1
+
+    print(f"wrote starter policy: {path}")
+    print(f"default: {policy.default.value}")
+    print(f"rules: {len(policy.rules)}")
+    print(f"next: guard rules --policy {path}")
+    print(f"      guard explain --policy {path} -- rm -rf /tmp/x")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="guard", description="Run a command in a governed sandbox.")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -409,6 +531,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     explain.add_argument("command", nargs=argparse.REMAINDER, help="-- command to explain")
     explain.set_defaults(func=_explain)
+
+    init = sub.add_parser(
+        "init",
+        help="write a starter policy file you can edit and pass to --policy",
+        description=(
+            "Scaffold a starter policy (same shape as policy.example.yaml). "
+            "Refuses to overwrite unless --force. Loads the file after write "
+            "so a broken starter never ships."
+        ),
+    )
+    init.add_argument(
+        "path",
+        nargs="?",
+        default="policy.yaml",
+        help="output path (default: policy.yaml); .json writes JSON instead of YAML",
+    )
+    init.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite an existing file",
+    )
+    init.set_defaults(func=_init)
 
     return parser
 
