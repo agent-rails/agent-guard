@@ -25,9 +25,7 @@ def test_gvisor_spawns_and_denies_egress():
     sbx = runtime.spawn(spec)
     try:
         assert sbx.attest().runtime_kind == "remote.gvisor"
-        out = sbx.dispatch(
-            "shell", {"cmd": "wget -T3 -q -O- http://example.com 2>&1 || echo BLOCKED"}
-        )
+        out = sbx.dispatch("shell", {"cmd": "wget -T3 -q -O- http://example.com 2>&1 || echo BLOCKED"})
         assert "BLOCKED" in out
         assert sbx.dispatch("shell", {"cmd": "echo alive"}).strip() == "alive"
     finally:
