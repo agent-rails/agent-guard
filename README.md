@@ -219,6 +219,33 @@ It spawns a local sandbox, attests it, mints an identity whose scopes are `human
 
 The block boundary is deliberate: `identity` does not import `agent_guard` and vice versa; the example wires them. Identity says *who/where*, the guard says *what*, the audit sink says *did*. See `docs/DESIGN-runtime-identity-binding.md` for the local-and-remote design and the honest trust gradient.
 
+## Isolation tiers & egress
+
+Isolation is a pluggable runtime backend selected by trust tier. The guard gates *on* the tier; the runtime *makes the tier real*. A tier is only attested when it is actually provided — no silent downgrade.
+
+| Tier | Backend | Isolation |
+|------|---------|-----------|
+| `local.container` | docker/podman (runc) | shared kernel — **not escape-safe**, dev/trusted only |
+| `remote.gvisor` | docker + gVisor (`runsc`) | user-space kernel, real added isolation |
+| `remote.microvm` | E2B/Firecracker (managed) | hardware-virtualized microVM *(next)* |
+
+gVisor tier (docker only):
+
+```bash
+# requires gVisor installed and registered with docker (runsc)
+RuntimeSpec(kind="remote.gvisor", runtime="runsc", image="…", network=False)
+```
+
+`ContainerRuntime.spawn` runs the container under `--runtime=runsc` and attests `remote.gvisor` **only** when runsc was actually used. If runsc is not installed (or the engine is podman, whose `--runtime` fail-loud semantics are unverified), it **raises** rather than falling back to runc — claiming isolation it did not provide is treated as a bug, not a convenience.
+
+Egress is a deterministic, fail-closed boundary (`EgressPolicy`), enforced at the container edge and outside the agent's influence:
+
+- default **deny** → `--network=none` (no outbound path)
+- `allow_all()` → engine default network
+- host allowlist is modelled but **fails loud** (`NotImplementedError`) until an egress proxy ships — no silent full-network grant
+
+The `gvisor` CI job installs runsc and runs the isolation test for real; it fails if that test is skipped, so the guarantee can't erode silently.
+
 ## Status
 
 Early. API will move. Issues and real-world policy examples welcome.
