@@ -270,6 +270,91 @@ def _resolve_policy(args) -> Policy:
     return _default_policy()
 
 
+def _parse_tool_args(pairs: list[str] | None) -> dict:
+    """Parse repeated --arg key=value pairs into a dict for tool checks."""
+    out: dict = {}
+    for raw in pairs or []:
+        if "=" not in raw:
+            raise SystemExit(f"invalid --arg {raw!r}; expected key=value")
+        key, value = raw.split("=", 1)
+        if not key:
+            raise SystemExit(f"invalid --arg {raw!r}; empty key")
+        out[key] = value
+    return out
+
+
+def _check(args) -> int:
+    """Dry-run a tool call against policy — no process spawn, no side effects.
+
+    Exit codes (deliberately *not* identical to ``guard run`` for gates):
+      0 allow
+      3 deny / would block
+      4 require_human (would gate; check never prompts)
+      1 usage error
+
+    ``guard run`` collapses a denied human gate to exit 3 because the TTY
+    approver refused. ``check`` keeps 4 so CI can distinguish hard-deny from
+    "needs a human" without executing anything.
+    """
+    import json
+
+    tool = args.tool
+    if tool == "shell":
+        command = [c for c in (args.command or []) if c != "--"]
+        if not command:
+            print("nothing to check; usage: guard check -- <command>", file=sys.stderr)
+            return 1
+        tool_args = {"cmd": " ".join(command)}
+        display = tool_args["cmd"]
+    else:
+        tool_args = _parse_tool_args(args.arg)
+        remainder = [c for c in (args.command or []) if c != "--"]
+        if remainder and "cmd" not in tool_args:
+            tool_args["cmd"] = " ".join(remainder)
+        display = f"{tool} {json.dumps(tool_args, sort_keys=True)}"
+
+    policy = _resolve_policy(args)
+    verdict = policy.evaluate(tool, tool_args, args.trust_tier)
+
+    decision = verdict.decision.value
+    rule_id = getattr(verdict, "rule_id", None) or ""
+    reason = verdict.reason or ""
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "tool": tool,
+                    "args": tool_args,
+                    "decision": decision,
+                    "rule_id": rule_id or None,
+                    "reason": reason,
+                    "would_execute": verdict.decision is Decision.ALLOW,
+                },
+                indent=2,
+            )
+        )
+    else:
+        print(f"check: {display}")
+        print(f"decision: {decision}")
+        if rule_id:
+            print(f"rule: {rule_id}")
+        if reason:
+            print(f"reason: {reason}")
+        if verdict.decision is Decision.ALLOW:
+            print("would_execute: yes")
+        elif verdict.decision is Decision.DENY:
+            print("would_execute: no (blocked)")
+        else:
+            print("would_execute: no (needs human approval)")
+
+    if verdict.decision is Decision.ALLOW:
+        return 0
+    if verdict.decision is Decision.DENY:
+        return 3
+    return 4  # require_human
+
+
 def _explain(args) -> int:
     """Show *which rule* matched a tool call and why — no execution.
 
@@ -339,6 +424,167 @@ def _explain(args) -> int:
     return 4
 
 
+def _validate(args) -> int:
+    """Validate a policy file's structure without evaluating any tool call.
+
+    Catches load errors, bad decisions, uncompilable arg regexes, unknown
+    trust tiers, and duplicate rule ids — the CI gate for policy authors
+    before ``guard check`` / ``guard run``.
+
+    Exit codes:
+      0 policy is valid
+      1 validation failed (or usage error)
+    """
+    import json
+    import re
+    from pathlib import Path
+
+    from agent_guard.tiers import TRUST_TIERS, rank
+
+    if not args.policy:
+        print("usage: guard validate --policy <file.yaml|json>", file=sys.stderr)
+        return 1
+
+    path = Path(args.policy)
+    errors: list[str] = []
+    warnings: list[str] = []
+    rule_count = 0
+    default = None
+
+    if not path.is_file():
+        errors.append(f"policy file not found: {path}")
+    else:
+        try:
+            text = path.read_text(encoding="utf-8")
+            if path.suffix in {".yaml", ".yml"}:
+                try:
+                    import yaml
+                except ImportError:
+                    errors.append("PyYAML is required to validate .yaml policies; `pip install pyyaml` or use JSON")
+                    data = None
+                else:
+                    data = yaml.safe_load(text)
+            else:
+                data = json.loads(text)
+        except (OSError, json.JSONDecodeError, ValueError) as err:
+            errors.append(f"failed to parse policy: {err}")
+            data = None
+
+        if data is None and not errors:
+            errors.append("policy file is empty")
+        elif isinstance(data, dict):
+            if "default" not in data:
+                errors.append("policy must declare an explicit 'default' decision")
+            else:
+                try:
+                    default = Decision(data["default"]).value
+                except ValueError:
+                    errors.append(f"invalid default decision {data['default']!r}; expected allow|deny|require_human")
+
+            rules = data.get("rules", [])
+            if rules is None:
+                errors.append("'rules' must be a list (got null)")
+                rules = []
+            elif not isinstance(rules, list):
+                errors.append(f"'rules' must be a list (got {type(rules).__name__})")
+                rules = []
+
+            seen_ids: dict[str, int] = {}
+            for index, raw in enumerate(rules):
+                rule_count += 1
+                loc = f"rule #{index}"
+                if not isinstance(raw, dict):
+                    errors.append(f"{loc}: expected a mapping, got {type(raw).__name__}")
+                    continue
+                rid = raw.get("id", f"rule-{index}")
+                loc = f"rule #{index} ({rid})"
+                if rid in seen_ids:
+                    errors.append(f"{loc}: duplicate id (also used by rule #{seen_ids[rid]})")
+                else:
+                    seen_ids[rid] = index
+
+                if "decision" not in raw:
+                    errors.append(f"{loc}: missing 'decision'")
+                else:
+                    try:
+                        Decision(raw["decision"])
+                    except ValueError:
+                        errors.append(f"{loc}: invalid decision {raw['decision']!r}; expected allow|deny|require_human")
+
+                tools = raw.get("tools")
+                if not tools:
+                    errors.append(f"{loc}: missing a non-empty 'tools' list")
+                elif not isinstance(tools, list):
+                    errors.append(f"{loc}: 'tools' must be a list")
+
+                patterns = raw.get("arg_patterns", []) or []
+                if not isinstance(patterns, list):
+                    errors.append(f"{loc}: 'arg_patterns' must be a list")
+                    patterns = []
+                for pat in patterns:
+                    try:
+                        re.compile(pat)
+                    except re.error as err:
+                        errors.append(f"{loc}: invalid arg_pattern {pat!r}: {err}")
+
+                tier = raw.get("min_trust_tier")
+                if tier is not None:
+                    try:
+                        rank(tier)
+                    except ValueError:
+                        errors.append(f"{loc}: unknown min_trust_tier {tier!r}; expected one of {TRUST_TIERS}")
+
+                if raw.get("judge") and "judge_ceiling" in raw:
+                    try:
+                        Decision(raw["judge_ceiling"])
+                    except ValueError:
+                        errors.append(f"{loc}: invalid judge_ceiling {raw['judge_ceiling']!r}")
+
+            if rule_count == 0:
+                warnings.append("policy has zero rules; only the default decision applies")
+
+            # Confirm the library loader agrees (catches any drift).
+            if not errors:
+                try:
+                    load_policy(path)
+                except Exception as err:  # noqa: BLE001 — surface any loader failure
+                    errors.append(f"load_policy rejected file: {err}")
+        elif data is not None:
+            errors.append(f"policy root must be a mapping (got {type(data).__name__})")
+
+    ok = not errors
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "ok": ok,
+                    "path": str(path),
+                    "default": default,
+                    "rule_count": rule_count,
+                    "errors": errors,
+                    "warnings": warnings,
+                },
+                indent=2,
+            )
+        )
+    else:
+        status = "ok" if ok else "FAILED"
+        print(f"validate: {path} — {status}")
+        if default is not None:
+            print(f"default: {default}")
+        print(f"rules: {rule_count}")
+        for w in warnings:
+            print(f"warning: {w}")
+        for e in errors:
+            print(f"error: {e}", file=sys.stderr)
+        if ok and not warnings:
+            print("policy is valid")
+        elif ok:
+            print("policy is valid (with warnings)")
+
+    return 0 if ok else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="guard", description="Run a command in a governed sandbox.")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -382,6 +628,44 @@ def build_parser() -> argparse.ArgumentParser:
     rules.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     rules.set_defaults(func=_rules)
 
+    check = sub.add_parser(
+        "check",
+        help="dry-run a tool call against policy (no process spawn, no side effects)",
+        description=(
+            "Evaluate policy for a tool call without executing anything. "
+            "Exit codes: 0=allow, 3=deny, 4=require_human (unlike `guard run`, "
+            "which returns 3 when a human gate is denied), 1=usage error."
+        ),
+    )
+    check.add_argument(
+        "--policy",
+        help="policy file (yaml/json); default is the same built-in policy as `guard run`",
+    )
+    check.add_argument(
+        "--tool",
+        default="shell",
+        help="tool name to evaluate (default: shell, matching `guard run`)",
+    )
+    check.add_argument(
+        "--arg",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="tool argument (repeatable); for non-shell tools, e.g. --arg query='DROP TABLE t'",
+    )
+    check.add_argument(
+        "--trust-tier",
+        default="local.process",
+        help="caller trust tier used for min_trust_tier rules (default: local.process)",
+    )
+    check.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    check.add_argument(
+        "command",
+        nargs=argparse.REMAINDER,
+        help="for --tool shell: -- <command to evaluate>",
+    )
+    check.set_defaults(func=_check)
+
     explain = sub.add_parser(
         "explain",
         help="show which policy rule matches a command (no execution)",
@@ -409,6 +693,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     explain.add_argument("command", nargs=argparse.REMAINDER, help="-- command to explain")
     explain.set_defaults(func=_explain)
+
+    validate = sub.add_parser(
+        "validate",
+        help="validate a policy file (structure, regexes, trust tiers) without evaluating calls",
+        description=(
+            "Structural policy check for CI. Does not evaluate a tool call "
+            "(use `guard check` for that). Exit 0 if valid, 1 on errors."
+        ),
+    )
+    validate.add_argument(
+        "--policy",
+        required=True,
+        help="policy file (yaml/json) to validate",
+    )
+    validate.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    validate.set_defaults(func=_validate)
 
     return parser
 
