@@ -58,6 +58,90 @@ class Policy:
                 return verdict_for_rule(rule, tool, trust_tier)
         return Verdict(decision=self.default, reason="no rule matched; policy default")
 
+    def explain(
+        self, tool: str, args: dict[str, Any], trust_tier: str = TRUST_TIERS[0]
+    ) -> dict[str, Any]:
+        """First-match explanation for humans and CI.
+
+        Unlike ``evaluate``, this returns *why* a rule won: which tool
+        glob matched, which ``arg_patterns`` entry hit (if any), and how
+        many prior rules were skipped. Default path is explicit when
+        nothing matches.
+        """
+        rendered_args = _render_args(args)
+        skipped: list[dict[str, Any]] = []
+        for index, rule in enumerate(self.rules):
+            tool_hit = any(fnmatch.fnmatch(tool, pattern) for pattern in rule.tools)
+            if not tool_hit:
+                skipped.append(
+                    {
+                        "id": rule.id,
+                        "index": index,
+                        "why_skipped": "tool pattern miss",
+                        "tools": list(rule.tools),
+                    }
+                )
+                continue
+            matched_patterns: list[str] = []
+            if rule.arg_patterns:
+                matched_patterns = [
+                    pat for pat in rule.arg_patterns if re.search(pat, rendered_args)
+                ]
+                if not matched_patterns:
+                    skipped.append(
+                        {
+                            "id": rule.id,
+                            "index": index,
+                            "why_skipped": "arg pattern miss",
+                            "tools": list(rule.tools),
+                            "arg_patterns": list(rule.arg_patterns),
+                        }
+                    )
+                    continue
+            verdict = verdict_for_rule(rule, tool, trust_tier)
+            return {
+                "tool": tool,
+                "args": args,
+                "rendered_args": rendered_args,
+                "trust_tier": trust_tier,
+                "matched": True,
+                "rule": {
+                    "id": rule.id,
+                    "index": index,
+                    "decision": rule.decision.value,
+                    "tools": list(rule.tools),
+                    "arg_patterns": list(rule.arg_patterns),
+                    "matched_arg_patterns": matched_patterns,
+                    "reason": rule.reason,
+                    "min_trust_tier": rule.min_trust_tier,
+                    "judge": rule.judge,
+                },
+                "verdict": {
+                    "decision": verdict.decision.value,
+                    "reason": verdict.reason,
+                    "rule_id": verdict.rule_id,
+                    "needs_judge": verdict.needs_judge,
+                },
+                "skipped_before": skipped,
+                "default": self.default.value,
+            }
+        return {
+            "tool": tool,
+            "args": args,
+            "rendered_args": rendered_args,
+            "trust_tier": trust_tier,
+            "matched": False,
+            "rule": None,
+            "verdict": {
+                "decision": self.default.value,
+                "reason": "no rule matched; policy default",
+                "rule_id": None,
+                "needs_judge": False,
+            },
+            "skipped_before": skipped,
+            "default": self.default.value,
+        }
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Policy:
         if "default" not in data:

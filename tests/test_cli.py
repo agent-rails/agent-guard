@@ -107,3 +107,44 @@ def test_rules_bundled_has_module_rules(capsys):
     out = capsys.readouterr().out
     # bundled pack uses module-prefixed ids
     assert "shell-rm-rf" in out or "recursive force delete" in out
+
+
+def test_explain_rm_rf_shows_matching_rule(capsys):
+    code = main(["explain", "--", "rm", "-rf", "/tmp/x"])
+    assert code == 3
+    out = capsys.readouterr().out
+    assert "decision: deny" in out
+    assert "matched_rule: block-rm-rf" in out
+    assert "matched_patterns:" in out
+
+
+def test_explain_allowed_echo(capsys):
+    code = main(["explain", "--", "echo", "hi"])
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "decision: allow" in out
+    assert "policy default" in out or "matched_rule: (none" in out
+
+
+def test_explain_json_shape():
+    import json
+    from io import StringIO
+    import sys
+
+    buf = StringIO()
+    old = sys.stdout
+    sys.stdout = buf
+    try:
+        code = main(["explain", "--json", "--", "rm", "-rf", "/var"])
+    finally:
+        sys.stdout = old
+    assert code == 3
+    data = json.loads(buf.getvalue())
+    assert data["matched"] is True
+    assert data["rule"]["id"] == "block-rm-rf"
+    assert data["verdict"]["decision"] == "deny"
+    assert any("rm" in p for p in data["rule"]["matched_arg_patterns"])
+
+
+def test_explain_empty_errors():
+    assert main(["explain", "--"]) == 1
