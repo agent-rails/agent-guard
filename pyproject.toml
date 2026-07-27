@@ -27,6 +27,7 @@ guard = "agent_guard.cli:main"
 
 [project.optional-dependencies]
 yaml = ["pyyaml>=6"]
+e2b = ["e2b>=1"]
 dev = ["pytest>=8", "pyyaml>=6", "ruff>=0.6"]
 
 [build-system]
