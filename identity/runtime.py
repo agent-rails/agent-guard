@@ -81,6 +81,9 @@ def _run(argv: list[str]) -> str:
 
 
 def _runsc_available() -> bool:
+    # UX pre-check for a clearer error only; NOT the security boundary. Docker
+    # hard-fails on `--runtime=runsc` when runsc is unregistered, and the sandbox
+    # (hence the remote.gvisor attestation) is built only after that succeeds.
     return shutil.which("runsc") is not None
 
 
@@ -125,11 +128,18 @@ class ContainerRuntime:
         if not spec.image:
             raise ValueError("container runtime requires spec.image")
         want_gvisor = spec.runtime == "runsc" or spec.kind == "remote.gvisor"
-        if want_gvisor and not _runsc_available():
-            raise RuntimeError(
-                "gVisor (runsc) requested but not installed; refusing to fall back to runc — "
-                "that would claim remote.gvisor isolation without providing it"
-            )
+        if want_gvisor:
+            if self._engine != "docker":
+                raise RuntimeError(
+                    f"gVisor tier is only verified on docker; engine is '{self._engine}'. "
+                    "Refusing — podman's --runtime fail-loud semantics are not yet verified, "
+                    "so it could run a default runtime while attesting remote.gvisor"
+                )
+            if not _runsc_available():
+                raise RuntimeError(
+                    "gVisor (runsc) requested but not installed; refusing to fall back to runc — "
+                    "that would claim remote.gvisor isolation without providing it"
+                )
         argv = [self._engine, "run", "-d", "--rm"]
         if want_gvisor:
             argv += ["--runtime", "runsc"]

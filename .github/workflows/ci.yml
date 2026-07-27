@@ -42,5 +42,17 @@ jobs:
           sudo runsc install
           sudo systemctl reload docker
       - run: pip install -e ".[dev]"
-      - name: Isolation tests under gVisor
-        run: python -m pytest -q tests/test_gvisor_isolation.py -v
+      - name: Verify runsc + docker are active (fail if not)
+        run: |
+          set -euo pipefail
+          command -v runsc
+          command -v docker
+          docker info >/dev/null
+      - name: Isolation tests under gVisor (must not vacuously skip)
+        run: |
+          set -euo pipefail
+          python -m pytest -q tests/test_gvisor_isolation.py -v | tee /tmp/gvisor.log
+          if grep -qi "skipped" /tmp/gvisor.log; then
+            echo "::error::gVisor isolation test skipped — runsc/docker not active; this job must exercise real isolation, not pass vacuously" >&2
+            exit 1
+          fi
