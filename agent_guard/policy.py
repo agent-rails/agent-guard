@@ -12,6 +12,13 @@ from .tiers import TRUST_TIERS, meets
 
 
 @dataclass(frozen=True)
+class MatchDetail:
+    matched: bool
+    matched_patterns: list[str] = field(default_factory=list)
+    why_skipped: str | None = None
+
+
+@dataclass(frozen=True)
 class Rule:
     id: str
     decision: Decision
@@ -22,12 +29,25 @@ class Rule:
     judge: bool = False
     judge_ceiling: Decision = Decision.REQUIRE_HUMAN
 
-    def matches(self, tool: str, rendered_args: str) -> bool:
+    def match_detail(self, tool: str, rendered_args: str) -> MatchDetail:
+        """Single source of matching truth: used by both evaluate and explain.
+
+        Returns whether this rule matches, which arg_patterns hit, and — when
+        it does not match — why it was skipped. evaluate reads only .matched;
+        explain reads the rest. Keeping one implementation prevents the two
+        paths from drifting into disagreement.
+        """
         if not any(fnmatch.fnmatch(tool, pattern) for pattern in self.tools):
-            return False
+            return MatchDetail(matched=False, why_skipped="tool pattern miss")
         if not self.arg_patterns:
-            return True
-        return any(re.search(pattern, rendered_args) for pattern in self.arg_patterns)
+            return MatchDetail(matched=True)
+        hits = [pattern for pattern in self.arg_patterns if re.search(pattern, rendered_args)]
+        if not hits:
+            return MatchDetail(matched=False, why_skipped="arg pattern miss")
+        return MatchDetail(matched=True, matched_patterns=hits)
+
+    def matches(self, tool: str, rendered_args: str) -> bool:
+        return self.match_detail(tool, rendered_args).matched
 
 
 def verdict_for_rule(rule: Rule, tool: str, trust_tier: str) -> Verdict:
@@ -69,31 +89,19 @@ class Policy:
         rendered_args = _render_args(args)
         skipped: list[dict[str, Any]] = []
         for index, rule in enumerate(self.rules):
-            tool_hit = any(fnmatch.fnmatch(tool, pattern) for pattern in rule.tools)
-            if not tool_hit:
-                skipped.append(
-                    {
-                        "id": rule.id,
-                        "index": index,
-                        "why_skipped": "tool pattern miss",
-                        "tools": list(rule.tools),
-                    }
-                )
+            detail = rule.match_detail(tool, rendered_args)
+            if not detail.matched:
+                entry: dict[str, Any] = {
+                    "id": rule.id,
+                    "index": index,
+                    "why_skipped": detail.why_skipped,
+                    "tools": list(rule.tools),
+                }
+                if detail.why_skipped == "arg pattern miss":
+                    entry["arg_patterns"] = list(rule.arg_patterns)
+                skipped.append(entry)
                 continue
-            matched_patterns: list[str] = []
-            if rule.arg_patterns:
-                matched_patterns = [pat for pat in rule.arg_patterns if re.search(pat, rendered_args)]
-                if not matched_patterns:
-                    skipped.append(
-                        {
-                            "id": rule.id,
-                            "index": index,
-                            "why_skipped": "arg pattern miss",
-                            "tools": list(rule.tools),
-                            "arg_patterns": list(rule.arg_patterns),
-                        }
-                    )
-                    continue
+            matched_patterns = detail.matched_patterns
             verdict = verdict_for_rule(rule, tool, trust_tier)
             return {
                 "tool": tool,
