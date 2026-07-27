@@ -21,3 +21,26 @@ jobs:
       - run: ruff format --check .
       - run: python -m pytest -q
       - run: python examples/end_to_end.py
+
+  gvisor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install gVisor (runsc)
+        run: |
+          set -euo pipefail
+          ARCH=$(uname -m)
+          URL="https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}"
+          wget -q "${URL}/runsc" "${URL}/runsc.sha512" \
+               "${URL}/containerd-shim-runsc-v1" "${URL}/containerd-shim-runsc-v1.sha512"
+          sha512sum -c runsc.sha512 -c containerd-shim-runsc-v1.sha512
+          chmod +x runsc containerd-shim-runsc-v1
+          sudo mv runsc containerd-shim-runsc-v1 /usr/local/bin/
+          sudo runsc install
+          sudo systemctl reload docker
+      - run: pip install -e ".[dev]"
+      - name: Isolation tests under gVisor
+        run: python -m pytest -q tests/test_gvisor_isolation.py -v
