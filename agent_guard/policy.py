@@ -16,6 +16,7 @@ class MatchDetail:
     matched: bool
     matched_patterns: list[str] = field(default_factory=list)
     why_skipped: str | None = None
+    skipped_on_args: bool = False
 
 
 @dataclass(frozen=True)
@@ -43,7 +44,7 @@ class Rule:
             return MatchDetail(matched=True)
         hits = [pattern for pattern in self.arg_patterns if re.search(pattern, rendered_args)]
         if not hits:
-            return MatchDetail(matched=False, why_skipped="arg pattern miss")
+            return MatchDetail(matched=False, why_skipped="arg pattern miss", skipped_on_args=True)
         return MatchDetail(matched=True, matched_patterns=hits)
 
     def matches(self, tool: str, rendered_args: str) -> bool:
@@ -97,7 +98,7 @@ class Policy:
                     "why_skipped": detail.why_skipped,
                     "tools": list(rule.tools),
                 }
-                if detail.why_skipped == "arg pattern miss":
+                if detail.skipped_on_args:
                     entry["arg_patterns"] = list(rule.arg_patterns)
                 skipped.append(entry)
                 continue

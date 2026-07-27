@@ -36,25 +36,58 @@ def _policy() -> Policy:
                     "min_trust_tier": "remote.microvm",
                     "reason": "prod deploy needs isolation",
                 },
+                {
+                    "id": "judge-email",
+                    "decision": "require_human",
+                    "tools": ["email"],
+                    "judge": True,
+                    "reason": "external email needs judgment",
+                },
             ],
         }
     )
 
 
 CASES = [
-    ("shell", {"cmd": "rm -rf /tmp/x"}),
-    ("shell", {"cmd": "echo hi"}),
-    ("shell", {"cmd": "git push --force origin main"}),
-    ("dangerous.exec", {"cmd": "anything"}),
-    ("deploy", {"cmd": "deploy prod"}),
-    ("unknown", {"cmd": "nothing matches"}),
+    ("shell", {"cmd": "rm -rf /tmp/x"}, "local.process"),
+    ("shell", {"cmd": "echo hi"}, "local.process"),
+    ("shell", {"cmd": "git push --force origin main"}, "local.process"),
+    ("dangerous.exec", {"cmd": "anything"}, "local.process"),
+    ("deploy", {"cmd": "deploy prod"}, "local.process"),
+    ("deploy", {"cmd": "deploy prod"}, "remote.microvm"),
+    ("email", {"to": "x@external.com"}, "local.process"),
+    ("unknown", {"cmd": "nothing matches"}, "local.process"),
 ]
 
 
 def test_explain_agrees_with_evaluate():
     policy = _policy()
-    for tool, args in CASES:
-        verdict = policy.evaluate(tool, args, "local.process")
-        detail = policy.explain(tool, args, "local.process")
-        assert detail["verdict"]["decision"] == verdict.decision.value, (tool, args)
-        assert detail["verdict"]["rule_id"] == verdict.rule_id, (tool, args)
+    for tool, args, tier in CASES:
+        verdict = policy.evaluate(tool, args, tier)
+        detail = policy.explain(tool, args, tier)
+        assert detail["verdict"]["decision"] == verdict.decision.value, (tool, args, tier)
+        assert detail["verdict"]["rule_id"] == verdict.rule_id, (tool, args, tier)
+        assert detail["verdict"]["needs_judge"] == verdict.needs_judge, (tool, args, tier)
+
+
+def test_explain_output_shape_pinned():
+    policy = _policy()
+
+    # tool-only match surfaces empty matched_arg_patterns
+    tool_only = policy.explain("dangerous.exec", {"cmd": "x"}, "local.process")
+    assert tool_only["matched"] is True
+    assert tool_only["rule"]["matched_arg_patterns"] == []
+
+    # arg-pattern match surfaces the hitting pattern
+    arg_hit = policy.explain("shell", {"cmd": "rm -rf /tmp/x"}, "local.process")
+    assert arg_hit["rule"]["matched_arg_patterns"]
+
+    # tool-miss skip entries omit arg_patterns; arg-miss skip entries include it
+    default_path = policy.explain("shell", {"cmd": "harmless"}, "local.process")
+    reasons = {s["why_skipped"] for s in default_path["skipped_before"]}
+    assert "tool pattern miss" in reasons
+    for skip in default_path["skipped_before"]:
+        if skip["why_skipped"] == "tool pattern miss":
+            assert "arg_patterns" not in skip
+        if skip["why_skipped"] == "arg pattern miss":
+            assert "arg_patterns" in skip
