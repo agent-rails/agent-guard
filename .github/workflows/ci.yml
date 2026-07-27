@@ -29,6 +29,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Pre-pull the isolation test image (before runsc touches docker)
+        run: |
+          set -euo pipefail
+          for i in 1 2 3; do docker pull busybox:latest && break || { echo "pull attempt $i failed"; sleep 5; }; done
+          docker image inspect busybox:latest >/dev/null
       - name: Install gVisor (runsc)
         run: |
           set -euo pipefail
