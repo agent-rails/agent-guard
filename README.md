@@ -62,6 +62,47 @@ All three share one policy engine, one audit trail, one decision logic. Start wi
 
 Copy-paste runnable MCP walkthrough: [`examples/mcp/`](examples/mcp/) — a policy, a tiny server, and the exact commands (benign call forwarded, `DROP TABLE` blocked before the server sees it).
 
+## Dry-run a command before it runs (`guard check`)
+
+**The security question every operator asks:** *"Would this agent be allowed to run that?"*
+Answer it without spawning a process:
+
+```bash
+# Benign — exit 0
+guard check -- echo hello
+# decision: allow
+# would_execute: yes
+
+# Hard deny — exit 3
+guard check -- rm -rf /
+# decision: deny
+# rule: block-rm-rf
+# would_execute: no (blocked)
+
+# Human gate — exit 4 (would require approval; check never prompts)
+# Note: `guard run` returns 3 when a gate is denied by the TTY approver.
+# `check` keeps 4 so CI can tell hard-deny from "needs a human".
+guard check -- git push --force origin main
+# decision: require_human
+# rule: gate-force-push
+
+# Machine-readable for CI
+guard check --json -- rm -rf /tmp/x
+```
+
+Use this in CI to assert policy still covers the danger set without executing anything.
+
+## Validate a policy file (`guard validate`)
+
+Structural check for policy authors — parse, decisions, regex compile, trust tiers, duplicate ids — without evaluating a tool call:
+
+```bash
+guard validate --policy policy.example.yaml          # exit 0
+guard validate --json --policy policy.example.yaml   # CI-friendly JSON
+```
+
+Pair with `guard check` / `guard explain` for full policy CI: validate structure, then dry-run the danger set.
+
 ## 30-second use
 
 ```python
