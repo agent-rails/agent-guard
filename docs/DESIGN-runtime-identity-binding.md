@@ -39,10 +39,11 @@ Requirement: run agents remotely (cloud sandboxes) AND locally (dev laptop, air-
 class Runtime(Protocol):
     def spawn(self, spec: RuntimeSpec) -> Sandbox: ...
 
+
 class Sandbox(Protocol):
-    def attest(self) -> Attestation: ...          # evidence of what this runtime is
-    def dispatch(self, tool: str, args: dict): ... # the seam agent-guard wraps
-    def close(self) -> None: ...                   # ephemeral: credential dies here
+    def attest(self) -> Attestation: ...  # evidence of what this runtime is
+    def dispatch(self, tool: str, args: dict): ...  # the seam agent-guard wraps
+    def close(self) -> None: ...  # ephemeral: credential dies here
 ```
 
 Backends:
@@ -71,16 +72,17 @@ Policy consumes the posture: the same guard policy can require a minimum runtime
 ```python
 @dataclass
 class Attestation:
-    runtime_kind: str        # "local.process" | "local.container" | "remote.gvisor" | "remote.microvm"
-    code_digest: str         # hash of the agent image/code
+    runtime_kind: str  # "local.process" | "local.container" | "remote.gvisor" | "remote.microvm"
+    code_digest: str  # hash of the agent image/code
     sandbox_id: str
-    evidence: dict           # backend-specific: container id, platform doc, TEE quote
+    evidence: dict  # backend-specific: container id, platform doc, TEE quote
+
 
 @dataclass
 class AttestationResult:
     verified: bool
-    trust_tier: str          # drives max authority
-    claims: dict             # what the broker may mint into the token
+    trust_tier: str  # drives max authority
+    claims: dict  # what the broker may mint into the token
 ```
 
 - Local: `evidence` is process/container metadata. Verified against a local expected-digest allowlist. Trust tier capped at `local.*`.
@@ -112,16 +114,16 @@ Reuse RFC 8693 (OAuth token exchange) semantics — do not invent crypto.
 `agent-guard` already takes an `agent_id` and evaluates policy per tool call. The identity block feeds it:
 
 ```python
-sandbox = runtime.spawn(spec)                     # 1 spawn
-att = attestor.verify(sandbox.attest())           # 2 attest
-if not att.verified: raise Refused()              #   fail-closed
-token = broker.mint(att, human_grant, task_scope) # 3 mint
+sandbox = runtime.spawn(spec)  # 1 spawn
+att = attestor.verify(sandbox.attest())  # 2 attest
+if not att.verified:
+    raise Refused()  #   fail-closed
+token = broker.mint(att, human_grant, task_scope)  # 3 mint
 
-guard = Guard(policy, audit=sink,
-              agent_id=token.act.agent_id)         # identity feeds the guard
-guarded = guard.wrap(sandbox.dispatch)            # 4+5 authorize + audit
-guarded("sql", {"query": "..."})                  # 6 contained by the sandbox
-sandbox.close()                                    #   credential dies
+guard = Guard(policy, audit=sink, agent_id=token.act.agent_id)  # identity feeds the guard
+guarded = guard.wrap(sandbox.dispatch)  # 4+5 authorize + audit
+guarded("sql", {"query": "..."})  # 6 contained by the sandbox
+sandbox.close()  #   credential dies
 ```
 
 Policy can gate on `token.trust_tier` — the missing hook to add to `agent-guard`: a rule condition on minimum runtime tier per scope.
