@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
 from .attestation import Attestation
+from .egress import EgressPolicy
 
 ToolFn = Callable[[str, dict], Any]
 EXEC_TOOLS = {"shell", "exec"}
@@ -18,6 +19,13 @@ class RuntimeSpec:
     kind: str = "local.container"
     image: str | None = None
     network: bool = False
+    runtime: str | None = None
+    egress: EgressPolicy | None = None
+
+    def resolved_egress(self) -> EgressPolicy:
+        if self.egress is not None:
+            return self.egress
+        return EgressPolicy.allow_all() if self.network else EgressPolicy.deny_all()
 
 
 class Sandbox(Protocol):
@@ -72,19 +80,31 @@ def _run(argv: list[str]) -> str:
     return result.stdout.strip()
 
 
+def _runsc_available() -> bool:
+    # UX pre-check for a clearer error only; NOT the security boundary. Docker
+    # hard-fails on `--runtime=runsc` when runsc is unregistered, and the sandbox
+    # (hence the remote.gvisor attestation) is built only after that succeeds.
+    return shutil.which("runsc") is not None
+
+
 class ContainerSandbox:
-    def __init__(self, container_id: str, image_digest: str, engine: str) -> None:
+    def __init__(self, container_id: str, image_digest: str, engine: str, used_runsc: bool = False) -> None:
         self._container_id = container_id
         self._image_digest = image_digest
         self._engine = engine
+        self._used_runsc = used_runsc
         self._closed = False
 
     def attest(self) -> Attestation:
         return Attestation(
-            runtime_kind="local.container",
+            runtime_kind="remote.gvisor" if self._used_runsc else "local.container",
             code_digest=self._image_digest,
             sandbox_id=self._container_id[:12],
-            evidence={"engine": self._engine, "container_id": self._container_id},
+            evidence={
+                "engine": self._engine,
+                "container_id": self._container_id,
+                "runtime": "runsc" if self._used_runsc else "runc",
+            },
         )
 
     def dispatch(self, tool: str, args: dict) -> Any:
@@ -107,10 +127,24 @@ class ContainerRuntime:
     def spawn(self, spec: RuntimeSpec) -> ContainerSandbox:
         if not spec.image:
             raise ValueError("container runtime requires spec.image")
+        want_gvisor = spec.runtime == "runsc" or spec.kind == "remote.gvisor"
+        if want_gvisor:
+            if self._engine != "docker":
+                raise RuntimeError(
+                    f"gVisor tier is only verified on docker; engine is '{self._engine}'. "
+                    "Refusing — podman's --runtime fail-loud semantics are not yet verified, "
+                    "so it could run a default runtime while attesting remote.gvisor"
+                )
+            if not _runsc_available():
+                raise RuntimeError(
+                    "gVisor (runsc) requested but not installed; refusing to fall back to runc — "
+                    "that would claim remote.gvisor isolation without providing it"
+                )
         argv = [self._engine, "run", "-d", "--rm"]
-        if not spec.network:
-            argv += ["--network", "none"]
+        if want_gvisor:
+            argv += ["--runtime", "runsc"]
+        argv += spec.resolved_egress().network_args(self._engine)
         argv += [spec.image, "sleep", "infinity"]
         container_id = _run(argv)
         image_digest = _run([self._engine, "inspect", "--format", "{{.Image}}", container_id])
-        return ContainerSandbox(container_id, image_digest, self._engine)
+        return ContainerSandbox(container_id, image_digest, self._engine, used_runsc=want_gvisor)

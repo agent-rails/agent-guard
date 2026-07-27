@@ -21,3 +21,38 @@ jobs:
       - run: ruff format --check .
       - run: python -m pytest -q
       - run: python examples/end_to_end.py
+
+  gvisor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install gVisor (runsc)
+        run: |
+          set -euo pipefail
+          ARCH=$(uname -m)
+          URL="https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}"
+          wget -q "${URL}/runsc" "${URL}/runsc.sha512" \
+               "${URL}/containerd-shim-runsc-v1" "${URL}/containerd-shim-runsc-v1.sha512"
+          sha512sum -c runsc.sha512 -c containerd-shim-runsc-v1.sha512
+          chmod +x runsc containerd-shim-runsc-v1
+          sudo mv runsc containerd-shim-runsc-v1 /usr/local/bin/
+          sudo runsc install
+          sudo systemctl reload docker
+      - run: pip install -e ".[dev]"
+      - name: Verify runsc + docker are active (fail if not)
+        run: |
+          set -euo pipefail
+          command -v runsc
+          command -v docker
+          docker info >/dev/null
+      - name: Isolation tests under gVisor (must not vacuously skip)
+        run: |
+          set -euo pipefail
+          python -m pytest -q tests/test_gvisor_isolation.py -v | tee /tmp/gvisor.log
+          if grep -qi "skipped" /tmp/gvisor.log; then
+            echo "::error::gVisor isolation test skipped — runsc/docker not active; this job must exercise real isolation, not pass vacuously" >&2
+            exit 1
+          fi
