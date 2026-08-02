@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import base64
+import json
+import math
 from dataclasses import replace
 
 import pytest
 
-from identity.pop import PoPKeypair, public_key_thumbprint, verify_pop
+from identity import AttestationResult, Broker
+from identity.pop import PoPKeypair, PoPProof, public_key_thumbprint, verify_pop
+from identity.token import sign, verify
 
 
 def test_generate_and_thumbprint_are_deterministic_for_the_same_key():
@@ -80,3 +85,48 @@ def test_generate_raises_clearly_without_cryptography(monkeypatch):
     monkeypatch.setattr(pop_module, "_cryptography_ed25519", broken_import)
     with pytest.raises(ImportError, match="simulated"):
         PoPKeypair.generate()
+
+
+# verify_pop's own contract is "never raises, always returns bool" — every field on a
+# PoPProof is attacker-controlled, so malformed input must fail closed, not crash the
+# caller. These reproduce inputs that previously bypassed try/except and raised instead.
+
+
+def test_malformed_base64_public_key_fails_closed_not_raises():
+    bad = PoPProof(public_key="A", token_binding="x", iat=1000.0, signature="y")
+    assert verify_pop(bad, "some-token", "expected-thumbprint") is False
+
+
+def test_non_ascii_token_binding_fails_closed_not_raises():
+    thumbprint = public_key_thumbprint("AAAA")
+    bad = PoPProof(public_key="AAAA", token_binding="☃notascii", iat=1000.0, signature="y")
+    assert verify_pop(bad, "x", thumbprint) is False
+
+
+def test_nan_iat_does_not_bypass_the_freshness_window():
+    keypair = PoPKeypair.generate()
+    # A NaN iat would make `abs(now - iat) > max_age` evaluate False (NaN comparisons
+    # are always False), silently skipping the staleness gate if unguarded.
+    proof = keypair.prove("some-encoded-token", now=1000.0)
+    forged = replace(proof, iat=math.nan)
+    assert verify_pop(forged, "some-encoded-token", keypair.thumbprint(), now=2000.0) is False
+
+
+def test_cnf_cannot_be_stripped_to_downgrade_a_holder_bound_token_to_bearer():
+    # The load-bearing invariant: cnf lives inside the HMAC-signed payload, so it
+    # can't be removed/altered without invalidating the signature. If a future refactor
+    # ever excluded cnf from the signed body, this is the test that would catch it.
+    keypair = PoPKeypair.generate()
+    attestation = AttestationResult(verified=True, trust_tier="remote.microvm", sandbox_id="s1", reason="test")
+    token = Broker(secret=b"k").mint(attestation, "human:x", {"a"}, {"a"}, pop_thumbprint=keypair.thumbprint())
+    encoded = sign(token, b"k")
+
+    body_b64, mac_b64 = encoded.split(".", 1)
+    body = json.loads(base64.urlsafe_b64decode(body_b64))
+    assert body.get("cnf") is not None, "cnf must be present in the signed payload for this test to be meaningful"
+    del body["cnf"]
+    stripped_body = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+    downgraded = base64.urlsafe_b64encode(stripped_body).decode() + "." + mac_b64
+
+    with pytest.raises(ValueError, match="signature invalid"):
+        verify(downgraded, b"k")

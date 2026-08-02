@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import hmac
 import json
+import math
 import time
 from dataclasses import dataclass, replace
 
@@ -88,19 +90,23 @@ def verify_pop(
     max_age_seconds: float = 60.0,
 ) -> bool:
     """Fail-closed: any check failing (wrong key, wrong token, stale, tampered
-    signature) returns False — never raises, never partially trusts a proof."""
-    if public_key_thumbprint(proof.public_key) != expected_thumbprint:
-        return False
-    expected_binding = _b64u(hashlib.sha256(encoded_token.encode("utf-8")).digest())
-    if not hmac.compare_digest(proof.token_binding, expected_binding):
+    signature, or a malformed/adversarial proof field) returns False — never raises,
+    never partially trusts a proof. Every field here is attacker-controlled input."""
+    try:
+        if public_key_thumbprint(proof.public_key) != expected_thumbprint:
+            return False
+        expected_binding = _b64u(hashlib.sha256(encoded_token.encode("utf-8")).digest())
+        if not hmac.compare_digest(proof.token_binding, expected_binding):
+            return False
+    except (binascii.Error, ValueError, TypeError):
         return False
     now = now if now is not None else time.time()
-    if abs(now - proof.iat) > max_age_seconds:
+    if not math.isfinite(proof.iat) or abs(now - proof.iat) > max_age_seconds:
         return False
     _, ed25519_public, invalid_signature = _cryptography_ed25519()
     try:
         public_key = ed25519_public.from_public_bytes(_b64u_decode(proof.public_key))
         public_key.verify(_b64u_decode(proof.signature), proof._signable_body())
-    except (invalid_signature, ValueError):
+    except (invalid_signature, ValueError, TypeError, binascii.Error):
         return False
     return True
