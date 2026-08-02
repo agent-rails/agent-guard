@@ -106,10 +106,12 @@ def test_non_ascii_token_binding_fails_closed_not_raises():
 def test_nan_iat_does_not_bypass_the_freshness_window():
     keypair = PoPKeypair.generate()
     # A NaN iat would make `abs(now - iat) > max_age` evaluate False (NaN comparisons
-    # are always False), silently skipping the staleness gate if unguarded.
-    proof = keypair.prove("some-encoded-token", now=1000.0)
-    forged = replace(proof, iat=math.nan)
-    assert verify_pop(forged, "some-encoded-token", keypair.thumbprint(), now=2000.0) is False
+    # are always False), silently skipping the staleness gate if unguarded. The proof
+    # must be VALIDLY SIGNED with iat=nan (not mutated after signing via replace() —
+    # that breaks the signature and fails at the signature check instead, testing
+    # nothing about the freshness gate specifically).
+    proof = keypair.prove("some-encoded-token", now=math.nan)
+    assert verify_pop(proof, "some-encoded-token", keypair.thumbprint(), now=2000.0) is False
 
 
 def test_cnf_cannot_be_stripped_to_downgrade_a_holder_bound_token_to_bearer():
