@@ -82,8 +82,8 @@ Use it in-process with `guard.wrap()`, or as an MCP proxy that gates every `tool
 Install (not yet on PyPI — from GitHub):
 
 ```bash
-pip install git+https://github.com/voltagebots/agent-guard.git                        # core, zero runtime deps
-pip install "git+https://github.com/voltagebots/agent-guard.git#egg=agentguard[yaml]"  # + YAML policy files
+pip install git+https://github.com/voltagebots/agent-guard.git                     # core, zero runtime deps
+pip install "agentguard[yaml] @ git+https://github.com/voltagebots/agent-guard.git" # + YAML policy files
 ```
 
 Python, in 30 seconds:
