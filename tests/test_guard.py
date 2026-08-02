@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from agent_guard import BlockedError, Decision, Guard, MemoryAuditSink, Policy
+from identity import AttestationResult, Broker
 
 
 def raw_dispatch(tool: str, args: dict) -> str:
@@ -140,3 +141,40 @@ def test_guard_carries_trust_tier():
 def test_unknown_tier_is_rejected():
     with pytest.raises(ValueError):
         tier_policy().evaluate("prod_write", {}, trust_tier="not-a-tier")
+
+
+def mint(trust_tier: str, ttl_seconds: int = 300, now: float | None = None):
+    result = AttestationResult(verified=True, trust_tier=trust_tier, sandbox_id="s1", reason="test-stub")
+    return Broker(secret=b"k", ttl_seconds=ttl_seconds).mint(result, "human:x", {"a"}, {"a"}, now=now)
+
+
+def test_from_token_binds_trust_tier_not_a_typed_string():
+    token = mint("remote.microvm")
+    audit = MemoryAuditSink()
+    guard = Guard.from_token(token, tier_policy(), audit=audit)
+    result = guard.call(raw_dispatch, "prod_write", {})
+    assert result == "ran:prod_write"
+    assert audit.records[-1].decision == "allow"
+
+
+def test_from_token_denies_when_tokens_tier_insufficient():
+    token = mint("local.process")
+    audit = MemoryAuditSink()
+    guard = Guard.from_token(token, tier_policy(), audit=audit)
+    with pytest.raises(BlockedError):
+        guard.call(raw_dispatch, "prod_write", {})
+    assert audit.records[-1].executed is False
+
+
+def test_from_token_binds_agent_id_from_the_token():
+    token = mint("remote.microvm")
+    audit = MemoryAuditSink()
+    guard = Guard.from_token(token, tier_policy(), audit=audit)
+    guard.call(raw_dispatch, "prod_write", {})
+    assert audit.records[-1].agent_id == token.agent_id
+
+
+def test_from_token_rejects_expired_token():
+    token = mint("remote.microvm", ttl_seconds=1, now=1000.0)
+    with pytest.raises(ValueError):
+        Guard.from_token(token, tier_policy(), audit=MemoryAuditSink(), now=2000.0)

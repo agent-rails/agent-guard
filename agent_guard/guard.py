@@ -4,6 +4,8 @@ import functools
 from dataclasses import replace
 from typing import Any, Callable
 
+from identity.token import Token
+
 from .audit import AuditSink, build_record
 from .decision import Decision, Verdict, clamp
 from .judge import Judge, JudgeRequest
@@ -34,6 +36,11 @@ def deny_by_default(_: ApprovalRequest) -> bool:
 
 
 class Guard:
+    """`agent_id` and `trust_tier` are trusted as given — the plain constructor is for
+    local/no-identity use, where the caller IS the authority. Once a `Broker` is in the
+    picture, construct via `from_token` instead, so trust_tier can only come from a
+    verified attestation and not from a hand-typed string."""
+
     def __init__(
         self,
         policy: Policy,
@@ -49,6 +56,31 @@ class Guard:
         self._approver = approver
         self._trust_tier = trust_tier
         self._judge = judge
+
+    @classmethod
+    def from_token(
+        cls,
+        token: Token,
+        policy: Policy,
+        audit: AuditSink,
+        approver: HumanApprover = deny_by_default,
+        judge: Judge | None = None,
+        now: float | None = None,
+    ) -> Guard:
+        """Bind agent_id and trust_tier to a verified identity.Token (from `Broker.mint`
+        or `identity.token.verify`) instead of trusting a caller-supplied string. This is
+        the only entrypoint `min_trust_tier` rules should be relied on against once an
+        identity broker is in use."""
+        if token.expired(now):
+            raise ValueError("token expired")
+        return cls(
+            policy=policy,
+            audit=audit,
+            agent_id=token.agent_id,
+            approver=approver,
+            trust_tier=token.trust_tier,
+            judge=judge,
+        )
 
     def wrap(self, dispatch: ToolDispatch) -> ToolDispatch:
         def guarded(tool: str, args: dict[str, Any]) -> Any:
