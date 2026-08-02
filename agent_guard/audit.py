@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import hmac
 import json
@@ -111,17 +112,29 @@ def sign_record(record: AuditRecord, secret: bytes) -> str:
 def verify_record(record: AuditRecord, secret: bytes) -> bool:
     if record.sig is None:
         return False
+    try:
+        provided = base64.urlsafe_b64decode(record.sig)
+    except (binascii.Error, ValueError):
+        return False
     expected = hmac.new(secret, _signable_body(record), hashlib.sha256).digest()
-    return hmac.compare_digest(expected, base64.urlsafe_b64decode(record.sig))
+    return hmac.compare_digest(expected, provided)
 
 
 class SigningAuditSink:
-    """Wraps another sink and attaches an HMAC over each record before writing it, keyed
-    to a secret the producer holds. Without this, a compromised producer can call
-    `write()` with a forged or edited record and nothing downstream can tell — this
-    makes that tampering detectable (not preventable) by binding the signature to the
-    exact record content. Verify with `verify_record` against the same secret at the
-    consuming end."""
+    """Wraps another sink and attaches an HMAC over each record before writing it.
+
+    Defends against tampering AFTER a record leaves this process: a party that does
+    NOT hold `secret` (a downstream store, a network hop, a differently-privileged
+    service) cannot forge or edit a record without `verify_record` catching it.
+
+    Does NOT defend against a compromised producer — this process holds `secret` to
+    sign in the first place, so a compromised producer signs a forged record just as
+    validly as a real one. It also does not detect suppression: a producer that simply
+    never calls `write()` for an action leaves no gap here. Defending either of those
+    needs a different mechanism (e.g. a verify-only secret the producer can't reach,
+    plus sequence numbers or a hash chain across records) — not implemented here.
+
+    Verify with `verify_record` against the same secret at the consuming end."""
 
     def __init__(self, inner: AuditSink, secret: bytes) -> None:
         if not secret:

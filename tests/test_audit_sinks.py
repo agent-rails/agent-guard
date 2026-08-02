@@ -6,7 +6,7 @@ from dataclasses import replace
 import pytest
 
 from agent_guard import Decision, MemoryAuditSink, MultiAuditSink, SigningAuditSink, Verdict, WebhookAuditSink
-from agent_guard.audit import build_record, verify_record
+from agent_guard.audit import build_record, sign_record, verify_record
 
 
 def a_record():
@@ -82,3 +82,17 @@ def test_wrong_secret_fails_verification():
     inner = MemoryAuditSink()
     SigningAuditSink(inner, secret=b"k").write(a_record())
     assert verify_record(inner.records[-1], b"wrong-secret") is False
+
+
+def test_malformed_signature_fails_closed_instead_of_raising():
+    malformed = replace(a_record(), sig="not-valid-base64!!!")
+    assert verify_record(malformed, b"k") is False
+
+
+def test_a_party_with_the_secret_can_forge_a_valid_looking_record():
+    """Locks in the honest limit stated in SigningAuditSink's docstring: this defends
+    against a party that does NOT hold the secret, not a compromised producer that
+    does — anyone holding `secret` can sign whatever they want and it verifies clean."""
+    forged = replace(a_record(), executed=True, reason="i was never actually blocked")
+    forged = replace(forged, sig=sign_record(forged, b"k"))
+    assert verify_record(forged, b"k") is True
