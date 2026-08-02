@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from agent_guard import Guard, MemoryAuditSink, Policy
-from identity import (
+from agentguard_identity import (
     Attestation,
     Broker,
     LocalAttestor,
@@ -13,7 +13,7 @@ from identity import (
     sign,
     verify,
 )
-from identity.pop import verify_pop
+from agentguard_identity.pop import verify_pop
 
 
 def attestor() -> LocalAttestor:
@@ -137,7 +137,7 @@ def test_two_pop_enabled_sandboxes_get_different_keypairs():
 
 
 def test_end_to_end_spawn_attest_mint_prove_dispatch_with_pop():
-    # This is the full flow identity/pop.py's module docstring and the design doc
+    # This is the full flow agentguard_identity/pop.py's module docstring and the design doc
     # describe: spawn -> attest -> mint (holder-bound) -> prove -> authorize -> dispatch.
     # It's the test that proves PoP is actually wired up, not just a correct primitive
     # sitting unused.

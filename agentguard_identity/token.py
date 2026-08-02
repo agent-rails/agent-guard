@@ -18,7 +18,7 @@ class Token:
     exp: float
     issuer: str = "agent-guard.local"
     # Confirmation claim (RFC 7800-style): a PoPKeypair public-key thumbprint (see
-    # identity/pop.py). When set, this token is holder-bound — using it requires a
+    # agentguard_identity/pop.py). When set, this token is holder-bound — using it requires a
     # fresh PoPProof signed by the matching private key, not just the bearer string.
     # None means a plain bearer credential, same as every token before PoP existed.
     cnf: str | None = None

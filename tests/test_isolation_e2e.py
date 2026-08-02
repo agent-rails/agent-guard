@@ -10,7 +10,7 @@ from agent_guard import (
     PolicyModule,
     PolicyRegistry,
 )
-from identity import Broker, E2BRuntime, ProviderAttestor
+from agentguard_identity import Broker, E2BRuntime, ProviderAttestor
 
 
 class _FakeClient:

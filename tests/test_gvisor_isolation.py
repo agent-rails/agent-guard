@@ -4,7 +4,7 @@ import shutil
 
 import pytest
 
-from identity.runtime import ContainerRuntime, RuntimeSpec
+from agentguard_identity.runtime import ContainerRuntime, RuntimeSpec
 
 pytestmark = pytest.mark.skipif(
     shutil.which("runsc") is None or shutil.which("docker") is None,

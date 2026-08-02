@@ -21,7 +21,7 @@ Initial public release. (An earlier `v0.0.1` git tag existed but was never publi
 - `Guard.from_token()` requires an encoded, signed token string and verifies it
   internally, rather than accepting a bare `Token` object (which could be
   hand-constructed with any `trust_tier`, bypassing `min_trust_tier` policy entirely).
-- `identity.token.sign()`/`verify()` reject an empty secret; previously
+- `agentguard_identity.token.sign()`/`verify()` reject an empty secret; previously
   accepted silently, which allowed self-signing a top-tier token with no `Broker` or
   attestation involved.
 - Audit: `SigningAuditSink` — HMAC-signs each audit record via a wrapped sink. Detects
@@ -32,10 +32,15 @@ Initial public release. (An earlier `v0.0.1` git tag existed but was never publi
   requires a fresh `PoPProof` signed by the matching private key. Wired into
   `LocalSandbox`/`ContainerSandbox`/`RemoteSandbox` via `RuntimeSpec.pop_enabled` —
   opt-in, no change to existing bearer-token behavior when unused.
+- **Breaking (pre-release)**: the identity companion package is distributed as
+  `agentguard_identity`, not `identity` — the latter collides with an existing,
+  unrelated PyPI package (an MSAL-based auth library). Caught before this first
+  release, so this is not a migration for anyone; `from agentguard_identity import ...`
+  is the only form that has ever shipped.
 
 ## Stability
 
-- Public API is everything exported from `agent_guard` and `identity` top-level packages.
+- Public API is everything exported from `agent_guard` and `agentguard_identity` top-level packages.
 - On `0.x`: breaking changes may land in minor releases, called out here and in the release notes. Pin to `~=0.1.0` (or an exact version) if you need stability.
 - At `1.0`: semver is enforced — breaking changes only in majors, with a deprecation period.
 - Ships PEP 561 type information (`py.typed`); downstream type-checkers see inline types.

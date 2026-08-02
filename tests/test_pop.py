@@ -7,9 +7,9 @@ from dataclasses import replace
 
 import pytest
 
-from identity import AttestationResult, Broker
-from identity.pop import PoPKeypair, PoPProof, public_key_thumbprint, verify_pop
-from identity.token import sign, verify
+from agentguard_identity import AttestationResult, Broker
+from agentguard_identity.pop import PoPKeypair, PoPProof, public_key_thumbprint, verify_pop
+from agentguard_identity.token import sign, verify
 
 
 def test_generate_and_thumbprint_are_deterministic_for_the_same_key():
@@ -77,7 +77,7 @@ def test_public_key_thumbprint_matches_keypair_thumbprint():
 
 
 def test_generate_raises_clearly_without_cryptography(monkeypatch):
-    import identity.pop as pop_module
+    import agentguard_identity.pop as pop_module
 
     def broken_import():
         raise ImportError("simulated: cryptography not installed")

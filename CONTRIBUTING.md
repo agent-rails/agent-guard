@@ -20,7 +20,7 @@ guard run --dev-trust-runtime -- echo hi
 - Fail loud at the edge. A policy with no `default` is rejected. Unverified attestation mints nothing. No silent fallbacks — if a dependency is missing, raise, don't degrade.
 - Fail-closed on authorization. Missing judge, judge error, un-approved human gate → deny. The safe posture is the default.
 - Capability is code, not prompt. What an agent may do is what policy and identity permit — a guarantee, not an instruction.
-- Decoupled blocks. `identity` does not import `agent_guard`; examples wire them. Keep the seams clean.
+- Decoupled blocks. `agentguard_identity` does not import `agent_guard`; examples wire them. Keep the seams clean.
 - Cross-vendor, cross-harness. Nothing may hard-depend on one model vendor or one agent framework. The LLM judge is a `complete(prompt) -> str` callable so you bring your own model.
 - Explainable. Every verdict carries `module` / `layer` / `rule_id` / `reason`. Don't add a decision path that can't answer "why was this blocked?"
 

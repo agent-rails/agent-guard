@@ -22,7 +22,7 @@ class RuntimeSpec:
     network: bool = False
     runtime: str | None = None
     egress: EgressPolicy | None = None
-    # When True, the spawned Sandbox generates a PoPKeypair (identity/pop.py) and the
+    # When True, the spawned Sandbox generates a PoPKeypair (agentguard_identity/pop.py) and the
     # resulting Token should be minted with Broker.mint(pop_thumbprint=sandbox.pop_thumbprint()).
     # Requires the `[pop]` extra (`cryptography`) — fails loud at spawn if missing, not
     # silently falls back to a plain bearer token.

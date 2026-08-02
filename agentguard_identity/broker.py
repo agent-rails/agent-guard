@@ -26,7 +26,7 @@ class Broker:
         now: float | None = None,
         pop_thumbprint: str | None = None,
     ) -> Token:
-        """`pop_thumbprint` (optional): a PoPKeypair.thumbprint() (identity/pop.py) the
+        """`pop_thumbprint` (optional): a PoPKeypair.thumbprint() (agentguard_identity/pop.py) the
         caller holds the private key for. When given, the minted Token is holder-bound
         via its `cnf` claim — presenting the encoded token alone won't be enough to use
         it, a fresh PoPProof signed by that key is also required. Omit for a plain

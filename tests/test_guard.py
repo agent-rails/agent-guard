@@ -3,9 +3,9 @@ from __future__ import annotations
 import pytest
 
 from agent_guard import BlockedError, Decision, Guard, MemoryAuditSink, Policy
-from identity import AttestationResult, Broker
-from identity.pop import PoPKeypair
-from identity.token import Token, sign
+from agentguard_identity import AttestationResult, Broker
+from agentguard_identity.pop import PoPKeypair
+from agentguard_identity.token import Token, sign
 
 
 def raw_dispatch(tool: str, args: dict) -> str:
@@ -218,7 +218,7 @@ def test_from_token_rejects_a_token_signed_with_a_different_secret():
         Guard.from_token(encoded, SECRET, tier_policy(), audit=MemoryAuditSink())
 
 
-# Proof-of-possession (holder-bound tokens, identity/pop.py). These tests exist
+# Proof-of-possession (holder-bound tokens, agentguard_identity/pop.py). These tests exist
 # specifically to demonstrate the property PoP adds beyond what from_token already
 # checked above: a leaked/stolen ENCODED TOKEN STRING alone, with no other change,
 # must not be enough to use a holder-bound token.

@@ -16,9 +16,9 @@ from agent_guard import (
     parse_verdict,
 )
 from agent_guard.judge import build_prompt
-from identity import Broker, ProviderAttestor, RemoteSandbox
-from identity.pop import verify_pop
-from identity.token import sign
+from agentguard_identity import Broker, ProviderAttestor, RemoteSandbox
+from agentguard_identity.pop import verify_pop
+from agentguard_identity.token import sign
 
 
 def raw_dispatch(tool: str, args: dict) -> str:

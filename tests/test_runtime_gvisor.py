@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-import identity.runtime as rt
-from identity.egress import EgressPolicy
-from identity.pop import verify_pop
-from identity.runtime import ContainerRuntime, ContainerSandbox, RuntimeSpec
+import agentguard_identity.runtime as rt
+from agentguard_identity.egress import EgressPolicy
+from agentguard_identity.pop import verify_pop
+from agentguard_identity.runtime import ContainerRuntime, ContainerSandbox, RuntimeSpec
 
 
 @pytest.fixture

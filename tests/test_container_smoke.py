@@ -5,7 +5,7 @@ import subprocess
 
 import pytest
 
-from identity import Broker, ContainerRuntime, LocalAttestor, RuntimeSpec
+from agentguard_identity import Broker, ContainerRuntime, LocalAttestor, RuntimeSpec
 
 IMAGE = "alpine:latest"
 
