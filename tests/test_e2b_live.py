@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from identity import E2BRuntime, ProviderAttestor
+from agentguard_identity import E2BRuntime, ProviderAttestor
 
 pytestmark = pytest.mark.skipif(
     not os.getenv("E2B_API_KEY"),

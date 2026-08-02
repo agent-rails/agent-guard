@@ -1,6 +1,6 @@
 [project]
 name = "agentguard"
-version = "0.0.1"
+version = "0.1.0"
 description = "Least-privilege authorization, per-agent identity, and audit for AI agent tool calls. Harness-agnostic, local-first, fail-closed."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -36,11 +36,11 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["agent_guard", "identity"]
+packages = ["agent_guard", "agentguard_identity"]
 
 [tool.setuptools.package-data]
 agent_guard = ["py.typed"]
-identity = ["py.typed"]
+agentguard_identity = ["py.typed"]
 
 [tool.ruff]
 line-length = 120

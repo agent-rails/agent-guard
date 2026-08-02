@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from identity.egress import EgressPolicy
+from agentguard_identity.egress import EgressPolicy
 
 
 def test_deny_all_is_network_none():

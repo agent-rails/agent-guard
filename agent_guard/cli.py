@@ -17,7 +17,7 @@ from agent_guard import (
 )
 from agent_guard.guard import ApprovalRequest, deny_by_default
 from agent_guard.mcp import run_proxy
-from identity import Broker, ContainerRuntime, LocalAttestor, LocalRuntime, RefusedError, RuntimeSpec
+from agentguard_identity import Broker, ContainerRuntime, LocalAttestor, LocalRuntime, RefusedError, RuntimeSpec
 
 
 def _shell(tool: str, args: dict) -> str:

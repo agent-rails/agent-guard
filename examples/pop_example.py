@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from agent_guard import Guard, MemoryAuditSink, Policy
-from identity import Broker, LocalAttestor, LocalRuntime, RuntimeSpec
-from identity.token import sign
+from agentguard_identity import Broker, LocalAttestor, LocalRuntime, RuntimeSpec
+from agentguard_identity.token import sign
 
 
 def real_tools(tool: str, args: dict) -> str:

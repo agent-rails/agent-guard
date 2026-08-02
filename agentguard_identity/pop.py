@@ -83,7 +83,7 @@ class PoPKeypair:
 
 
 class PoPCapableSandbox:
-    """Mixin for Sandbox implementations (identity/runtime.py, identity/remote.py) that
+    """Mixin for Sandbox implementations (agentguard_identity/runtime.py, agentguard_identity/remote.py) that
     can optionally generate a PoPKeypair at spawn time and prove possession of it later.
     A concrete sandbox calls `self._init_pop(spec.pop_enabled)` once in `__init__`, then
     gets `pop_thumbprint()`/`prove_possession()` for free. Keeps the "generate a keypair

@@ -136,7 +136,7 @@ python examples/pop_example.py
 gVisor isolation tier (needs docker + gVisor `runsc`):
 
 ```python
-from identity import ContainerRuntime, RuntimeSpec
+from agentguard_identity import ContainerRuntime, RuntimeSpec
 
 sbx = ContainerRuntime().spawn(RuntimeSpec(kind="remote.gvisor", runtime="runsc", image="busybox", network=False))
 sbx.attest().runtime_kind  # 'remote.gvisor' only if runsc actually ran, else spawn raised
