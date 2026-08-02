@@ -4,6 +4,8 @@ Notable changes. This project follows [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-02
+
 - CLI: `guard init` writes a starter policy file (YAML or JSON), refuses overwrite
   without `--force`, and loads the file after write so a broken starter never ships.
 - **Security**: `Guard.from_token()` now requires an encoded, signed token string and
