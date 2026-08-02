@@ -198,6 +198,21 @@ guard rules --policy policy.yaml   # inspect what you just wrote
 
 The starter matches `policy.example.yaml` (deny `DROP TABLE` / `rm -rf`, gate force-push and prod writes, tier-gate deploys). Edit it, then pass `--policy` to `guard run` / `guard explain` / `guard rules`.
 
+## Scanning file-write content, not just tool calls (`policy.write-content-scan.example.yaml`)
+
+The same `Policy`/`Guard` seam that gates `rm -rf` in a shell command also gates content about to be written to disk — frame the write as a synthetic tool call and evaluate it the same way:
+
+```python
+from agent_guard import Guard, load_policy, MemoryAuditSink
+
+policy = load_policy("policy.write-content-scan.example.yaml")
+guard = Guard(policy, audit=MemoryAuditSink(), agent_id="editor")
+guard.call(lambda tool, args: write_file(args["path"], args["content"]),
+           "write", {"path": "script.sh", "content": file_content})
+```
+
+`guard check` works the same way from the CLI. The bundled example policy denies pipe-to-shell, `eval`/`exec`, base64-blob payloads, credential/sensitive-path references, and symlink creation; destructive-but-common patterns (`rm -rf`, `chmod`, `.env` references, `git reset --hard`) are allowed but still carry a `rule_id` in the audit trail, so they're visible without blocking real work — matches this repo's own `default: allow` posture, not a paranoid default-deny that would false-positive on ordinary edits. Deliberately deterministic regex, not an LLM judging its own output — see [Design stance](#design-stance) above for why that boundary matters.
+
 ## Run a command in a governed sandbox (`guard run`)
 
 Governed terminal execution — spawn a sandbox, mint a scoped identity, run a command through the guard, audit it:
