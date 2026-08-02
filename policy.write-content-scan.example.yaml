@@ -1,0 +1,78 @@
+default: allow
+
+# Companion to policy.example.yaml, for a different seam: not "should this tool
+# call run" but "should this file-write content land on disk." Framed as a
+# synthetic tool call — {"tool": "write", "args": {"path": ..., "content": ...}}
+# — so the same deterministic, tested Policy engine evaluates both.
+#
+# Patterns migrated from ~/.claude/scripts/scan-skill.sh's general (non-frontmatter-
+# structural) checks. Its YAML-frontmatter-aware checks (e.g. "hooks: directive
+# inside frontmatter") don't translate to a flat regex-over-content model and
+# stay skill-specific, not migrated here.
+
+rules:
+  - id: pipe-to-shell
+    decision: deny
+    tools: ["write"]
+    arg_patterns: ["(curl|wget)\\s+.*\\|\\s*(sh|bash)"]
+    reason: remote code execution — piping a fetch straight into a shell
+
+  - id: eval-call
+    decision: deny
+    tools: ["write"]
+    arg_patterns: ["\\beval\\s*\\("]
+    reason: eval() call in written content
+
+  - id: exec-call
+    decision: deny
+    tools: ["write"]
+    arg_patterns: ["\\bexec\\s*\\("]
+    reason: exec() call in written content
+
+  - id: base64-blob
+    decision: deny
+    tools: ["write"]
+    arg_patterns: ["[A-Za-z0-9+/]{50,}={0,2}"]
+    reason: possible base64-encoded payload
+
+  - id: sensitive-path-reference
+    decision: deny
+    tools: ["write"]
+    arg_patterns: ["(?i)(~/\\.ssh/|credentials|tokens|secrets)"]
+    reason: reference to sensitive paths or credential material
+
+  - id: claude-md-reference
+    decision: deny
+    tools: ["write"]
+    arg_patterns: ["(?i)(~/\\.claude/CLAUDE\\.md|CLAUDE\\.md)"]
+    reason: reference to CLAUDE.md — memory-poisoning vector
+
+  - id: symlink-creation
+    decision: deny
+    tools: ["write"]
+    arg_patterns: ["\\bln\\s+-s\\b"]
+    reason: symlink creation in written content
+
+  - id: destructive-git-reset
+    decision: allow
+    tools: ["write"]
+    arg_patterns: ["git\\s+reset\\s+--hard"]
+    reason: "logged, not blocked: destructive git operation referenced in written content"
+
+  - id: destructive-rm
+    decision: allow
+    tools: ["write"]
+    arg_patterns: ["\\brm\\s+-(rf|fr|f)\\b"]
+    reason: "logged, not blocked: destructive file operation referenced in written content"
+
+  - id: dotenv-reference
+    decision: allow
+    tools: ["write"]
+    arg_patterns: ["(?i)\\.env\\b"]
+    reason: "logged, not blocked: reference to a .env file"
+
+  - id: permission-modification
+    decision: allow
+    tools: ["write"]
+    arg_patterns: ["\\b(chmod|chown)\\b"]
+    reason: "logged, not blocked: permission-modification command referenced in written content"
