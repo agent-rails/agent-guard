@@ -96,6 +96,19 @@ def test_medium_pattern_allowed_but_logged():
     assert verdict.rule_id == "permission-modification"
 
 
+def test_every_deny_rule_precedes_every_allow_rule():
+    # Load-bearing safety property, currently held only by hand-ordering the
+    # YAML file: because Policy is first-match-wins over one rendered
+    # string, a deny rule appended AFTER an allow rule could be silently
+    # masked for content matching both. Pins the ordering so that can't
+    # regress without this test failing first.
+    rules = policy().rules
+    deny_indices = [i for i, r in enumerate(rules) if r.decision is Decision.DENY]
+    allow_indices = [i for i, r in enumerate(rules) if r.decision is Decision.ALLOW]
+    assert deny_indices and allow_indices
+    assert max(deny_indices) < min(allow_indices)
+
+
 def test_policy_loads_without_pyyaml_error():
     # Confirms the new file doesn't break agent-guard's existing YAML-loading
     # behavior (raises a clear ImportError only if PyYAML is actually absent).
