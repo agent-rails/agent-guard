@@ -8,6 +8,8 @@ Least-privilege authorization + audit for AI agent tool calls. One small library
 
 Harness-agnostic by design: it wraps a plain `dispatch(tool, args)` function, which is the shape of a raw agent loop, an MCP `call_tool`, and a native function-calling executor alike. No framework lock-in.
 
+New here? Start with the [walkthrough](docs/WALKTHROUGH.md) — what it solves, how it works, how to run it, and where an LLM judge fits.
+
 ## The problem
 
 Agents run with their operator's full permissions and no record of what they did. One prompt injection reaches everything the human can touch. `agent-guard` puts a policy-as-code boundary in front of the tool call, so an agent physically cannot run an irreversible action that policy forbids — and every attempt is auditable.
