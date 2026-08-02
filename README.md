@@ -200,18 +200,23 @@ The starter matches `policy.example.yaml` (deny `DROP TABLE` / `rm -rf`, gate fo
 
 ## Scanning file-write content, not just tool calls (`policy.write-content-scan.example.yaml`)
 
-The same `Policy`/`Guard` seam that gates `rm -rf` in a shell command also gates content about to be written to disk — frame the write as a synthetic tool call and evaluate it the same way:
+The same `Policy`/`Guard` seam that gates `rm -rf` in a shell command also gates content about to be written to disk — frame the write as a synthetic tool call and evaluate it the same way. **Evaluate with `content` only, never `path`** — `Policy` renders the whole args dict into one matched string, so including `path` would deny a file merely *named* `secrets.yaml` regardless of what's in it; track the path separately in your own code if you need it recorded:
 
 ```python
 from agent_guard import Guard, load_policy, MemoryAuditSink
 
 policy = load_policy("policy.write-content-scan.example.yaml")
 guard = Guard(policy, audit=MemoryAuditSink(), agent_id="editor")
-guard.call(lambda tool, args: write_file(args["path"], args["content"]),
-           "write", {"path": "script.sh", "content": file_content})
+
+
+def write_to(path):  # path is captured, not part of what gets pattern-matched
+    return lambda tool, args: write_file(path, args["content"])
+
+
+guard.call(write_to("script.sh"), "write", {"content": file_content})
 ```
 
-`guard check` works the same way from the CLI. The bundled example policy denies pipe-to-shell, `eval`/`exec`, base64-blob payloads, credential/sensitive-path references, and symlink creation; destructive-but-common patterns (`rm -rf`, `chmod`, `.env` references, `git reset --hard`) are allowed but still carry a `rule_id` in the audit trail, so they're visible without blocking real work — matches this repo's own `default: allow` posture, not a paranoid default-deny that would false-positive on ordinary edits. Deliberately deterministic regex, not an LLM judging its own output — see [Design stance](#design-stance) above for why that boundary matters.
+No CLI subcommand for this exists yet — `guard explain`/`guard check` are shaped around shell commands (`{"cmd": ...}`), not arbitrary args dicts; Python is the only interface today. The bundled example policy denies pipe-to-shell, `eval`/`exec`, credential/sensitive-path *word* references (not credential-shape detection — `password=`/`api_key=` slip through undetected, same limitation as the script it was migrated from), CLAUDE.md references, and symlink creation; noisier/destructive-but-common patterns (`rm -rf`, `chmod`, `.env` references, `git reset --hard`, base64-looking blobs — the last downgraded after lockfile integrity hashes turned out to be a real false-positive) are allowed but still carry a `rule_id` in the audit trail, visible without blocking real work — matches this repo's own `default: allow` posture. Deliberately deterministic regex, not an LLM judging its own output — see [Design stance](#design-stance) above for why that boundary matters.
 
 ## Run a command in a governed sandbox (`guard run`)
 

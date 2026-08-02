@@ -2,13 +2,32 @@ default: allow
 
 # Companion to policy.example.yaml, for a different seam: not "should this tool
 # call run" but "should this file-write content land on disk." Framed as a
-# synthetic tool call — {"tool": "write", "args": {"path": ..., "content": ...}}
-# — so the same deterministic, tested Policy engine evaluates both.
+# synthetic tool call — {"tool": "write", "args": {"content": ...}} — so the
+# same deterministic, tested Policy engine evaluates both.
 #
-# Patterns migrated from ~/.claude/scripts/scan-skill.sh's general (non-frontmatter-
-# structural) checks. Its YAML-frontmatter-aware checks (e.g. "hooks: directive
-# inside frontmatter") don't translate to a flat regex-over-content model and
-# stay skill-specific, not migrated here.
+# IMPORTANT: evaluate with args={"content": ...} ONLY, never {"path": ...,
+# "content": ...} together — Policy renders the whole args dict into one
+# matched string, so including path would make a file merely NAMED
+# "secrets.yaml" or "tokens.ts" deny regardless of content. Track path
+# separately (e.g. in your own audit wrapper) if you need it recorded.
+#
+# First-match-wins over the combined rendered string means only one rule_id
+# surfaces per write, even if content matches multiple allow-tier patterns —
+# deny-safety is preserved (every deny rule is ordered before every allow
+# rule, so no deny is ever masked), but this is not a multi-finding report
+# the way ~/.claude/scripts/scan-skill.sh's per-line scan is.
+#
+# Patterns migrated from scan-skill.sh's general (non-frontmatter-structural)
+# checks. NOT migrated, deliberately:
+#   - YAML-frontmatter-aware checks (e.g. "hooks: directive inside
+#     frontmatter") — don't translate to a flat regex-over-content model.
+#   - Line-start harness-execution syntax ("^! ") — same reason, no line
+#     anchor survives JSON-flattening into one rendered string.
+#   - Bare network calls (curl/wget/fetch NOT piped to a shell) — was a LOW
+#     scan-skill.sh finding; omitted here rather than added as noise.
+# The credential/sensitive-path rule below is a literal word match, not a
+# credential-shape detector — password=/api_key=/PRIVATE_KEY= slip through
+# with no rule matching, same limitation scan-skill.sh already had.
 
 rules:
   - id: pipe-to-shell
@@ -29,17 +48,11 @@ rules:
     arg_patterns: ["\\bexec\\s*\\("]
     reason: exec() call in written content
 
-  - id: base64-blob
-    decision: deny
-    tools: ["write"]
-    arg_patterns: ["[A-Za-z0-9+/]{50,}={0,2}"]
-    reason: possible base64-encoded payload
-
   - id: sensitive-path-reference
     decision: deny
     tools: ["write"]
-    arg_patterns: ["(?i)(~/\\.ssh/|credentials|tokens|secrets)"]
-    reason: reference to sensitive paths or credential material
+    arg_patterns: ["(?i)(~/\\.ssh/|\\bcredentials\\b|\\btokens\\b|\\bsecrets\\b)"]
+    reason: reference to sensitive paths or credential material (word match, not a credential-shape detector)
 
   - id: claude-md-reference
     decision: deny
@@ -52,6 +65,12 @@ rules:
     tools: ["write"]
     arg_patterns: ["\\bln\\s+-s\\b"]
     reason: symlink creation in written content
+
+  - id: base64-blob
+    decision: allow
+    tools: ["write"]
+    arg_patterns: ["[A-Za-z0-9+/]{50,}={0,2}"]
+    reason: "logged, not blocked: possible base64-encoded payload — deny is too aggressive here (lockfile integrity hashes, minified assets are common legitimate matches); scan-skill.sh's HIGH severity was calibrated for skill-file instructions specifically, a narrower and riskier context"
 
   - id: destructive-git-reset
     decision: allow
