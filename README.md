@@ -113,7 +113,7 @@ Shows a benign query allowed, a `DROP TABLE` blocked, a `git push --force` gated
 - Policy — an explicit `default` (required — no silent fallback) plus ordered `rules`. First matching rule wins.
 - Rule — `tools` (glob) + optional `arg_patterns` (regex over the rendered args) → a `decision`.
 - Guard — wraps a `dispatch(tool, args)`; evaluates, gates, executes, audits.
-- Audit — one structured record per decision. Sinks: `JsonlAuditSink` (local file), `WebhookAuditSink` (ship to a SIEM / collector — fail-loud, never drops), `CallableAuditSink` (any `emit` callable — OpenTelemetry / statsd / custom), `MultiAuditSink` (fan-out: durable local + remote), `SigningAuditSink` (wraps another sink, HMAC-signs each record so tampering by a party *without* the signing secret is detectable — does not defend against a compromised producer, which already holds the secret it signs with), `MemoryAuditSink` (tests), or your own `AuditSink`.
+- Audit — one structured record per decision. Sinks: `JsonlAuditSink` (local file), `WebhookAuditSink` (ship to a SIEM / collector — fail-loud, never drops), `CallableAuditSink` (any `emit` callable — OpenTelemetry / statsd / custom), `MultiAuditSink` (fan-out: durable local + remote), `SigningAuditSink` (wraps another sink, HMAC-signs each record so tampering by a party *without* the signing secret is detectable — does not defend against a compromised producer, which already holds the secret it signs with, nor does it detect a producer that simply never emits a record), `MemoryAuditSink` (tests), or your own `AuditSink`.
 
 ## Scaling policy — federated, layered, cached (goose-style)
 

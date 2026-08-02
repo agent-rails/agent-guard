@@ -67,7 +67,7 @@ A tier is attested only when actually provided. If you request `remote.gvisor` b
 
 ### Audit
 
-Every call is recorded and attributed to the agent identity, via a JSONL, in-memory, webhook, or fan-out sink. Wrap any sink in `SigningAuditSink` to HMAC-sign each record — detects tampering by a party that doesn't hold the signing secret; does not defend against a compromised producer, which already holds the secret it would sign a forgery with.
+Every call is recorded and attributed to the agent identity, via a JSONL, in-memory, webhook, or fan-out sink. Wrap any sink in `SigningAuditSink` to HMAC-sign each record — detects tampering by a party that doesn't hold the signing secret; does not defend against a compromised producer (which already holds the secret it would sign a forgery with) or suppression (a producer that simply never emits a record leaves no gap).
 
 ### Holder-bound tokens (proof-of-possession)
 
