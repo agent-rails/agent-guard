@@ -85,7 +85,11 @@ def test_wrong_secret_fails_verification():
 
 
 def test_malformed_signature_fails_closed_instead_of_raising():
-    malformed = replace(a_record(), sig="not-valid-base64!!!")
+    # "not-valid-base64!!!" would NOT trigger this: urlsafe_b64decode silently drops the
+    # "!!!" and returns garbage bytes without raising, so that input can't distinguish
+    # fixed from unfixed code. "A" has invalid base64 padding and genuinely raises
+    # binascii.Error pre-fix — this is the input that actually exercises the except branch.
+    malformed = replace(a_record(), sig="A")
     assert verify_record(malformed, b"k") is False
 
 
