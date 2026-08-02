@@ -4,7 +4,8 @@ import pytest
 
 import identity.runtime as rt
 from identity.egress import EgressPolicy
-from identity.runtime import ContainerRuntime, RuntimeSpec
+from identity.pop import verify_pop
+from identity.runtime import ContainerRuntime, ContainerSandbox, RuntimeSpec
 
 
 @pytest.fixture
@@ -52,3 +53,25 @@ def test_non_gvisor_attests_local_container(captured):
 def test_network_bool_maps_to_egress():
     assert RuntimeSpec(network=False).resolved_egress().default == "deny"
     assert RuntimeSpec(network=True).resolved_egress().default == "allow"
+
+
+def test_container_sandbox_pop_enabled_generates_a_usable_keypair():
+    sandbox = ContainerSandbox("cid", "digest", "docker", pop_enabled=True)
+    thumbprint = sandbox.pop_thumbprint()
+    assert thumbprint is not None
+    proof = sandbox.prove_possession("some-encoded-token")
+    assert verify_pop(proof, "some-encoded-token", thumbprint) is True
+
+
+def test_container_sandbox_pop_disabled_by_default():
+    sandbox = ContainerSandbox("cid", "digest", "docker")
+    assert sandbox.pop_thumbprint() is None
+    with pytest.raises(RuntimeError, match="PoP not enabled"):
+        sandbox.prove_possession("some-encoded-token")
+
+
+def test_container_runtime_spawn_threads_pop_enabled_through(monkeypatch, captured):
+    monkeypatch.setattr(rt, "_runsc_available", lambda: True)
+    runtime = ContainerRuntime(engine="docker")
+    sbx = runtime.spawn(RuntimeSpec(image="busybox", pop_enabled=True))
+    assert sbx.pop_thumbprint() is not None

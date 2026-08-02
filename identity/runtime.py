@@ -8,6 +8,7 @@ from typing import Any, Callable, Protocol
 
 from .attestation import Attestation
 from .egress import EgressPolicy
+from .pop import PoPCapableSandbox, PoPProof
 
 ToolFn = Callable[[str, dict], Any]
 EXEC_TOOLS = {"shell", "exec"}
@@ -21,6 +22,11 @@ class RuntimeSpec:
     network: bool = False
     runtime: str | None = None
     egress: EgressPolicy | None = None
+    # When True, the spawned Sandbox generates a PoPKeypair (identity/pop.py) and the
+    # resulting Token should be minted with Broker.mint(pop_thumbprint=sandbox.pop_thumbprint()).
+    # Requires the `[pop]` extra (`cryptography`) — fails loud at spawn if missing, not
+    # silently falls back to a plain bearer token.
+    pop_enabled: bool = False
 
     def resolved_egress(self) -> EgressPolicy:
         if self.egress is not None:
@@ -32,14 +38,17 @@ class Sandbox(Protocol):
     def attest(self) -> Attestation: ...
     def dispatch(self, tool: str, args: dict) -> Any: ...
     def close(self) -> None: ...
+    def pop_thumbprint(self) -> str | None: ...
+    def prove_possession(self, encoded_token: str) -> PoPProof: ...
 
 
-class LocalSandbox:
+class LocalSandbox(PoPCapableSandbox):
     def __init__(self, spec: RuntimeSpec, tool_fn: ToolFn) -> None:
         self._spec = spec
         self._tool_fn = tool_fn
         self._sandbox_id = f"sbx-{uuid.uuid4().hex[:8]}"
         self._closed = False
+        self._init_pop(spec.pop_enabled)
 
     def attest(self) -> Attestation:
         return Attestation(
@@ -87,13 +96,21 @@ def _runsc_available() -> bool:
     return shutil.which("runsc") is not None
 
 
-class ContainerSandbox:
-    def __init__(self, container_id: str, image_digest: str, engine: str, used_runsc: bool = False) -> None:
+class ContainerSandbox(PoPCapableSandbox):
+    def __init__(
+        self,
+        container_id: str,
+        image_digest: str,
+        engine: str,
+        used_runsc: bool = False,
+        pop_enabled: bool = False,
+    ) -> None:
         self._container_id = container_id
         self._image_digest = image_digest
         self._engine = engine
         self._used_runsc = used_runsc
         self._closed = False
+        self._init_pop(pop_enabled)
 
     def attest(self) -> Attestation:
         return Attestation(
@@ -147,4 +164,6 @@ class ContainerRuntime:
         argv += [spec.image, "sleep", "infinity"]
         container_id = _run(argv)
         image_digest = _run([self._engine, "inspect", "--format", "{{.Image}}", container_id])
-        return ContainerSandbox(container_id, image_digest, self._engine, used_runsc=want_gvisor)
+        return ContainerSandbox(
+            container_id, image_digest, self._engine, used_runsc=want_gvisor, pop_enabled=spec.pop_enabled
+        )

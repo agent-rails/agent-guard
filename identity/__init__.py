@@ -1,5 +1,6 @@
 from .attestation import Attestation, AttestationResult, Attestor, LocalAttestor
 from .broker import Broker, RefusedError
+from .pop import PoPKeypair, PoPProof, public_key_thumbprint, verify_pop
 from .remote import E2BRuntime, ProviderAttestor, RemoteClient, RemoteSandbox
 from .runtime import (
     ContainerRuntime,
@@ -20,6 +21,8 @@ __all__ = [
     "ContainerSandbox",
     "E2BRuntime",
     "LocalAttestor",
+    "PoPKeypair",
+    "PoPProof",
     "ProviderAttestor",
     "RemoteClient",
     "RemoteSandbox",
@@ -29,6 +32,8 @@ __all__ = [
     "RuntimeSpec",
     "Sandbox",
     "Token",
+    "public_key_thumbprint",
     "sign",
     "verify",
+    "verify_pop",
 ]

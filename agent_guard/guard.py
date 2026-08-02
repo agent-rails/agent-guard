@@ -4,6 +4,7 @@ import functools
 from dataclasses import replace
 from typing import Any, Callable
 
+from identity.pop import PoPProof, verify_pop
 from identity.token import verify as verify_token
 
 from .audit import AuditSink, build_record
@@ -67,6 +68,7 @@ class Guard:
         approver: HumanApprover = deny_by_default,
         judge: Judge | None = None,
         now: float | None = None,
+        pop_proof: PoPProof | None = None,
     ) -> Guard:
         """Bind agent_id and trust_tier to a token that verifies against `secret` — the
         same HMAC `identity.token.sign`/`Broker` use. Takes the encoded string, not a
@@ -74,7 +76,14 @@ class Guard:
         directly would let a caller hand-construct `Token(trust_tier="remote.microvm",
         ...)` and grant themselves the top tier without ever going through a Broker —
         exactly the hand-typed-tier bypass this method exists to close. Requiring the
-        encoded+signed form means producing a valid one requires `secret`."""
+        encoded+signed form means producing a valid one requires `secret`.
+
+        If the token is holder-bound (`token.cnf` set — see identity/pop.py), a fresh
+        `pop_proof` from the matching PoPKeypair is REQUIRED and verified against the
+        exact `encoded_token` presented; without it (or with a wrong/stale/tampered
+        one) this raises, even though `secret` and the token signature both check out.
+        This is what stops a leaked/stolen encoded token from being usable on its own —
+        the bearer string alone is no longer sufficient once `cnf` is set."""
         if not isinstance(encoded_token, str):
             raise TypeError(
                 "from_token expects an encoded, signed token string (identity.token.sign(token, secret)), "
@@ -82,6 +91,11 @@ class Guard:
                 "no signature on its own"
             )
         token = verify_token(encoded_token, secret, now)
+        if token.cnf is not None:
+            if pop_proof is None:
+                raise ValueError("token is holder-bound (cnf set) but no pop_proof was provided")
+            if not verify_pop(pop_proof, encoded_token, token.cnf, now):
+                raise ValueError("pop_proof failed verification against token.cnf")
         return cls(
             policy=policy,
             audit=audit,
