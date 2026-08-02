@@ -82,6 +82,28 @@ class PoPKeypair:
         return replace(unsigned, signature=signature)
 
 
+class PoPCapableSandbox:
+    """Mixin for Sandbox implementations (identity/runtime.py, identity/remote.py) that
+    can optionally generate a PoPKeypair at spawn time and prove possession of it later.
+    A concrete sandbox calls `self._init_pop(spec.pop_enabled)` once in `__init__`, then
+    gets `pop_thumbprint()`/`prove_possession()` for free. Keeps the "generate a keypair
+    at spawn, thumbprint feeds Broker.mint, prove() feeds Guard.from_token" flow in one
+    place instead of duplicated per sandbox backend."""
+
+    _pop_keypair: PoPKeypair | None
+
+    def _init_pop(self, enabled: bool) -> None:
+        self._pop_keypair = PoPKeypair.generate() if enabled else None
+
+    def pop_thumbprint(self) -> str | None:
+        return self._pop_keypair.thumbprint() if self._pop_keypair is not None else None
+
+    def prove_possession(self, encoded_token: str) -> PoPProof:
+        if self._pop_keypair is None:
+            raise RuntimeError("PoP not enabled for this sandbox; spawn with RuntimeSpec(pop_enabled=True)")
+        return self._pop_keypair.prove(encoded_token)
+
+
 def verify_pop(
     proof: PoPProof,
     encoded_token: str,

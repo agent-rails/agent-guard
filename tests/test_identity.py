@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from agent_guard import Guard, MemoryAuditSink, Policy
 from identity import (
     Attestation,
     Broker,
@@ -12,6 +13,7 @@ from identity import (
     sign,
     verify,
 )
+from identity.pop import verify_pop
 
 
 def attestor() -> LocalAttestor:
@@ -108,3 +110,76 @@ def test_runtime_spawns_and_dispatches():
     sandbox.close()
     with pytest.raises(RuntimeError):
         sandbox.dispatch("t", {})
+
+
+def test_sandbox_without_pop_enabled_has_no_thumbprint_and_refuses_to_prove():
+    runtime = LocalRuntime(tool_fn=lambda tool, args: "ok")
+    sandbox = runtime.spawn(RuntimeSpec(code_digest="digest-ok", pop_enabled=False))
+    assert sandbox.pop_thumbprint() is None
+    with pytest.raises(RuntimeError, match="PoP not enabled"):
+        sandbox.prove_possession("some-encoded-token")
+
+
+def test_sandbox_with_pop_enabled_generates_a_usable_keypair():
+    runtime = LocalRuntime(tool_fn=lambda tool, args: "ok")
+    sandbox = runtime.spawn(RuntimeSpec(code_digest="digest-ok", pop_enabled=True))
+    thumbprint = sandbox.pop_thumbprint()
+    assert thumbprint is not None
+    proof = sandbox.prove_possession("some-encoded-token")
+    assert verify_pop(proof, "some-encoded-token", thumbprint) is True
+
+
+def test_two_pop_enabled_sandboxes_get_different_keypairs():
+    runtime = LocalRuntime(tool_fn=lambda tool, args: "ok")
+    a = runtime.spawn(RuntimeSpec(code_digest="digest-ok", pop_enabled=True))
+    b = runtime.spawn(RuntimeSpec(code_digest="digest-ok", pop_enabled=True))
+    assert a.pop_thumbprint() != b.pop_thumbprint()
+
+
+def test_end_to_end_spawn_attest_mint_prove_dispatch_with_pop():
+    # This is the full flow identity/pop.py's module docstring and the design doc
+    # describe: spawn -> attest -> mint (holder-bound) -> prove -> authorize -> dispatch.
+    # It's the test that proves PoP is actually wired up, not just a correct primitive
+    # sitting unused.
+    runtime = LocalRuntime(tool_fn=lambda tool, args: f"ran:{tool}")
+    sandbox = runtime.spawn(RuntimeSpec(code_digest="digest-ok", pop_enabled=True))
+
+    attestation_result = attestor().verify(sandbox.attest())
+    assert attestation_result.verified is True
+
+    token = Broker(secret=b"k").mint(
+        attestation_result, "human:x", {"prod_write"}, {"prod_write"}, pop_thumbprint=sandbox.pop_thumbprint()
+    )
+    encoded = sign(token, b"k")
+    proof = sandbox.prove_possession(encoded)
+
+    policy = Policy.from_dict(
+        {
+            "default": "deny",
+            "rules": [{"id": "r", "decision": "allow", "tools": ["prod_write"], "min_trust_tier": "local.container"}],
+        }
+    )
+    guard = Guard.from_token(encoded, b"k", policy, audit=MemoryAuditSink(), pop_proof=proof)
+    guarded = guard.wrap(sandbox.dispatch)
+    assert guarded("prod_write", {}) == "ran:prod_write"
+
+
+def test_end_to_end_a_second_sandboxs_proof_cannot_use_the_first_sandboxs_token():
+    # The actual attack this whole feature is for: two sandboxes exist, an attacker
+    # controls the second one and captures the first sandbox's encoded token (e.g. from
+    # a shared log), but cannot produce a proof the first token's cnf will accept.
+    runtime = LocalRuntime(tool_fn=lambda tool, args: "ran")
+    victim_sandbox = runtime.spawn(RuntimeSpec(code_digest="digest-ok", pop_enabled=True))
+    attacker_sandbox = runtime.spawn(RuntimeSpec(code_digest="digest-ok", pop_enabled=True))
+
+    attestation_result = attestor().verify(victim_sandbox.attest())
+    token = Broker(secret=b"k").mint(
+        attestation_result, "human:x", {"a"}, {"a"}, pop_thumbprint=victim_sandbox.pop_thumbprint()
+    )
+    encoded = sign(token, b"k")
+
+    forged_proof = attacker_sandbox.prove_possession(encoded)
+
+    policy = Policy.from_dict({"default": "allow", "rules": []})
+    with pytest.raises(ValueError, match="pop_proof failed"):
+        Guard.from_token(encoded, b"k", policy, audit=MemoryAuditSink(), pop_proof=forged_proof)

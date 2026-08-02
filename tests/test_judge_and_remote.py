@@ -9,6 +9,7 @@ from agent_guard import (
     JudgeRequest,
     LLMJudge,
     MemoryAuditSink,
+    Policy,
     PolicyModule,
     PolicyRegistry,
     ReferenceJudge,
@@ -16,6 +17,8 @@ from agent_guard import (
 )
 from agent_guard.judge import build_prompt
 from identity import Broker, ProviderAttestor, RemoteSandbox
+from identity.pop import verify_pop
+from identity.token import sign
 
 
 def raw_dispatch(tool: str, args: dict) -> str:
@@ -124,3 +127,30 @@ def test_remote_end_to_end_with_broker():
     token = Broker(secret=b"k").mint(result, "human:x", {"exec"}, {"exec"})
     assert token.trust_tier == "remote.gvisor"
     assert sandbox.dispatch("shell", {"cmd": "ls"}) == "remote-ran:ls"
+
+
+def test_remote_sandbox_pop_disabled_by_default():
+    sandbox = RemoteSandbox(FakeRemoteClient())
+    assert sandbox.pop_thumbprint() is None
+    with pytest.raises(RuntimeError, match="PoP not enabled"):
+        sandbox.prove_possession("some-encoded-token")
+
+
+def test_remote_sandbox_pop_enabled_generates_a_usable_keypair():
+    sandbox = RemoteSandbox(FakeRemoteClient(), pop_enabled=True)
+    thumbprint = sandbox.pop_thumbprint()
+    assert thumbprint is not None
+    proof = sandbox.prove_possession("some-encoded-token")
+    assert verify_pop(proof, "some-encoded-token", thumbprint) is True
+
+
+def test_remote_end_to_end_with_pop():
+    sandbox = RemoteSandbox(FakeRemoteClient(), pop_enabled=True)
+    result = ProviderAttestor({"trusted-template"}).verify(sandbox.attest())
+    token = Broker(secret=b"k").mint(result, "human:x", {"exec"}, {"exec"}, pop_thumbprint=sandbox.pop_thumbprint())
+    encoded = sign(token, b"k")
+    proof = sandbox.prove_possession(encoded)
+    policy = Policy.from_dict({"default": "allow", "rules": []})
+    guard = Guard.from_token(encoded, b"k", policy, audit=MemoryAuditSink(), pop_proof=proof)
+    guarded = guard.wrap(sandbox.dispatch)
+    assert guarded("shell", {"cmd": "ls"}) == "remote-ran:ls"

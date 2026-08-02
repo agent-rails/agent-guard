@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable, Protocol
 
 from .attestation import Attestation, AttestationResult
+from .pop import PoPCapableSandbox
 
 EXEC_TOOLS = {"shell", "exec"}
 
@@ -16,15 +17,16 @@ class RemoteClient(Protocol):
     def template(self) -> str: ...
 
 
-class RemoteSandbox:
+class RemoteSandbox(PoPCapableSandbox):
     """Adapter over a hosted micro-sandbox provider (E2B / Daytona / Modal). The client
     is injected, so this is testable offline and vendor-neutral. Attestation here is
     provider-asserted (the provider vouches for the template), not hardware-rooted — so
     the honest tier is remote.gvisor, not remote.microvm. See the trust gradient doc."""
 
-    def __init__(self, client: RemoteClient) -> None:
+    def __init__(self, client: RemoteClient, pop_enabled: bool = False) -> None:
         self._client = client
         self._closed = False
+        self._init_pop(pop_enabled)
 
     def attest(self) -> Attestation:
         return Attestation(
@@ -74,7 +76,8 @@ class E2BRuntime:
         self._client_factory = client_factory or _default_e2b_factory
 
     def spawn(self, spec=None) -> RemoteSandbox:
-        return RemoteSandbox(self._client_factory(self._template))
+        pop_enabled = spec.pop_enabled if spec is not None else False
+        return RemoteSandbox(self._client_factory(self._template), pop_enabled=pop_enabled)
 
 
 def _default_e2b_factory(template: str) -> RemoteClient:
