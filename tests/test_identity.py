@@ -67,6 +67,24 @@ def test_token_sign_and_verify_roundtrip():
     assert set(restored.scopes) == {"read"}
 
 
+def test_sign_rejects_empty_secret():
+    att = Attestation(runtime_kind="local.container", code_digest="digest-ok", sandbox_id="s1")
+    token = Broker(secret=b"k").mint(attestor().verify(att), "human:x", {"read"}, {"read"})
+    with pytest.raises(ValueError):
+        sign(token, b"")
+
+
+def test_verify_rejects_empty_secret():
+    # Guards against a real bypass: sign()/verify() previously accepted b"" silently,
+    # so anyone could self-sign a top-tier token with no Broker involved at all,
+    # reopening the exact hand-typed-tier escalation from_token exists to close.
+    att = Attestation(runtime_kind="local.container", code_digest="digest-ok", sandbox_id="s1")
+    token = Broker(secret=b"k").mint(attestor().verify(att), "human:x", {"read"}, {"read"})
+    encoded = sign(token, b"k")
+    with pytest.raises(ValueError):
+        verify(encoded, b"")
+
+
 def test_tampered_token_is_rejected():
     att = Attestation(runtime_kind="local.container", code_digest="digest-ok", sandbox_id="s1")
     token = Broker(secret=b"k").mint(attestor().verify(att), "human:x", {"read"}, {"read"})
