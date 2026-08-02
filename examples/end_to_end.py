@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from agent_guard import BlockedError, Decision, Guard, MemoryAuditSink, PolicyModule, PolicyRegistry
 from identity import Broker, LocalAttestor, LocalRuntime, RefusedError, RuntimeSpec
+from identity.token import sign
 
 
 def real_tools(tool: str, args: dict) -> str:
@@ -55,7 +56,8 @@ def main() -> None:
     result = attestor.verify(sandbox.attest())
     print(f"attestation: verified={result.verified} tier={result.trust_tier} ({result.reason})")
 
-    broker = Broker(secret=b"local-dev-secret", ttl_seconds=300)
+    secret = b"local-dev-secret"
+    broker = Broker(secret=secret, ttl_seconds=300)
     try:
         token = broker.mint(
             result,
@@ -71,9 +73,14 @@ def main() -> None:
     print(f"scopes:      {list(token.scopes)}  (human_grant intersect task_scope)")
     print(f"tier:        {token.trust_tier}\n")
 
-    # WHAT + DID: guard authorizes on the minted identity + tier, audits every call
+    # WHAT + DID: guard authorizes on a VERIFIED token, audits every call.
+    # Guard.from_token() re-verifies the signature (and the PoP proof, when the token
+    # is holder-bound) rather than trusting agent_id/trust_tier as caller-supplied
+    # strings — the whole point of minting through a Broker is that the guard checks
+    # it, not that the guard is told to believe it.
+    encoded_token = sign(token, secret)
     audit = MemoryAuditSink()
-    guard = Guard(policy(), audit=audit, agent_id=token.agent_id, trust_tier=token.trust_tier)
+    guard = Guard.from_token(encoded_token, secret, policy(), audit=audit)
     guarded = guard.wrap(sandbox.dispatch)
 
     attempts = [
