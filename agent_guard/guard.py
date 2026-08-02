@@ -4,7 +4,7 @@ import functools
 from dataclasses import replace
 from typing import Any, Callable
 
-from identity.token import Token
+from identity.token import verify as verify_token
 
 from .audit import AuditSink, build_record
 from .decision import Decision, Verdict, clamp
@@ -60,19 +60,28 @@ class Guard:
     @classmethod
     def from_token(
         cls,
-        token: Token,
+        encoded_token: str,
+        secret: bytes,
         policy: Policy,
         audit: AuditSink,
         approver: HumanApprover = deny_by_default,
         judge: Judge | None = None,
         now: float | None = None,
     ) -> Guard:
-        """Bind agent_id and trust_tier to a verified identity.Token (from `Broker.mint`
-        or `identity.token.verify`) instead of trusting a caller-supplied string. This is
-        the only entrypoint `min_trust_tier` rules should be relied on against once an
-        identity broker is in use."""
-        if token.expired(now):
-            raise ValueError("token expired")
+        """Bind agent_id and trust_tier to a token that verifies against `secret` — the
+        same HMAC `identity.token.sign`/`Broker` use. Takes the encoded string, not a
+        bare `Token` object: `Token` is a plain public dataclass, so accepting one
+        directly would let a caller hand-construct `Token(trust_tier="remote.microvm",
+        ...)` and grant themselves the top tier without ever going through a Broker —
+        exactly the hand-typed-tier bypass this method exists to close. Requiring the
+        encoded+signed form means producing a valid one requires `secret`."""
+        if not isinstance(encoded_token, str):
+            raise TypeError(
+                "from_token expects an encoded, signed token string (identity.token.sign(token, secret)), "
+                "not a bare Token object — a Token can be hand-constructed with any trust_tier and carries "
+                "no signature on its own"
+            )
+        token = verify_token(encoded_token, secret, now)
         return cls(
             policy=policy,
             audit=audit,
