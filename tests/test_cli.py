@@ -148,3 +148,49 @@ def test_explain_json_shape():
 
 def test_explain_empty_errors():
     assert main(["explain", "--"]) == 1
+
+
+def test_init_writes_loadable_yaml(tmp_path, capsys):
+    target = tmp_path / "policy.yaml"
+    code = main(["init", str(target)])
+    assert code == 0
+    assert target.is_file()
+    out = capsys.readouterr().out
+    assert "wrote starter policy" in out
+    assert "rules:" in out
+    # Starter is loadable and usable with rules/explain
+    assert main(["rules", "--policy", str(target)]) == 0
+    assert main(["explain", "--policy", str(target), "--", "rm", "-rf", "/tmp"]) == 3
+
+
+def test_init_refuses_overwrite_without_force(tmp_path, capsys):
+    target = tmp_path / "policy.yaml"
+    assert main(["init", str(target)]) == 0
+    code = main(["init", str(target)])
+    assert code == 1
+    assert "refusing to overwrite" in capsys.readouterr().err
+
+
+def test_init_force_overwrites(tmp_path):
+    target = tmp_path / "policy.yaml"
+    assert main(["init", str(target)]) == 0
+    target.write_text("broken", encoding="utf-8")
+    assert main(["init", "--force", str(target)]) == 0
+    assert "default:" in target.read_text(encoding="utf-8")
+
+
+def test_init_json(tmp_path, capsys):
+    import json
+
+    target = tmp_path / "policy.json"
+    assert main(["init", str(target)]) == 0
+    data = json.loads(target.read_text(encoding="utf-8"))
+    assert data["default"] == "allow"
+    assert any(r["id"] == "block-rm-rf" for r in data["rules"])
+    assert "wrote starter policy" in capsys.readouterr().out
+
+
+def test_init_default_path_is_policy_yaml(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert main(["init"]) == 0
+    assert (tmp_path / "policy.yaml").is_file()
