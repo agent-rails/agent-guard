@@ -19,6 +19,7 @@ Agents run with their operator's full permissions and no record of what they did
 ```bash
 pip install agentguard              # core, zero runtime dependencies
 pip install "agentguard[yaml]"      # + YAML policy files
+pip install "agentguard[pop]"       # + proof-of-possession (Ed25519 via cryptography)
 ```
 
 > Published as `agentguard` on PyPI (the `agent-guard` name was taken). Import path is `agent_guard`; the CLI is `guard`.
@@ -112,7 +113,7 @@ Shows a benign query allowed, a `DROP TABLE` blocked, a `git push --force` gated
 - Policy — an explicit `default` (required — no silent fallback) plus ordered `rules`. First matching rule wins.
 - Rule — `tools` (glob) + optional `arg_patterns` (regex over the rendered args) → a `decision`.
 - Guard — wraps a `dispatch(tool, args)`; evaluates, gates, executes, audits.
-- Audit — one structured record per decision. Sinks: `JsonlAuditSink` (local file), `WebhookAuditSink` (ship to a SIEM / collector — fail-loud, never drops), `CallableAuditSink` (any `emit` callable — OpenTelemetry / statsd / custom), `MultiAuditSink` (fan-out: durable local + remote), `MemoryAuditSink` (tests), or your own `AuditSink`.
+- Audit — one structured record per decision. Sinks: `JsonlAuditSink` (local file), `WebhookAuditSink` (ship to a SIEM / collector — fail-loud, never drops), `CallableAuditSink` (any `emit` callable — OpenTelemetry / statsd / custom), `MultiAuditSink` (fan-out: durable local + remote), `SigningAuditSink` (wraps another sink, HMAC-signs each record so tampering by a party *without* the signing secret is detectable — does not defend against a compromised producer, which already holds the secret it signs with, nor does it detect a producer that simply never emits a record), `MemoryAuditSink` (tests), or your own `AuditSink`.
 
 ## Scaling policy — federated, layered, cached (goose-style)
 
@@ -230,7 +231,28 @@ python examples/end_to_end.py
 
 It spawns a local sandbox, attests it, mints an identity whose scopes are `human_grant ∩ task_scope`, then shows a read allowed, a `DROP TABLE` denied, and a `prod_write` blocked because a `local.container` identity is below the `remote.microvm` tier the policy requires — a local agent cannot self-elevate.
 
-The block boundary is deliberate: `identity` does not import `agent_guard` and vice versa; the example wires them. Identity says *who/where*, the guard says *what*, the audit sink says *did*. See `docs/DESIGN-runtime-identity-binding.md` for the local-and-remote design and the honest trust gradient.
+Note the composition: the token is signed (`sign(token, secret)`) and the guard is built via `Guard.from_token(encoded, secret, ...)`, which re-verifies the signature rather than trusting `agent_id`/`trust_tier` as caller-supplied strings. The plain `Guard(...)` constructor still exists for local/no-identity use, but once a `Broker` is in the picture, `from_token` is the only path `min_trust_tier` rules should be relied on against.
+
+The block boundary is deliberate: `identity` does not import `agent_guard` and vice versa; the examples wire them. Identity says *who/where*, the guard says *what*, the audit sink says *did*. See `docs/DESIGN-runtime-identity-binding.md` for the local-and-remote design and the honest trust gradient.
+
+### Holder-bound tokens (proof-of-possession)
+
+By default a minted token is a bearer credential: whoever holds the encoded string can use it, for its full TTL, however it was obtained (a leaked log line, a captured network hop). Opt a sandbox into holder-binding and that stops being true:
+
+```python
+sandbox = runtime.spawn(RuntimeSpec(code_digest="...", pop_enabled=True))  # generates an Ed25519 keypair
+token = broker.mint(attestation_result, subject, human_grant, task_scope, pop_thumbprint=sandbox.pop_thumbprint())
+encoded = sign(token, secret)
+proof = sandbox.prove_possession(encoded)  # fresh, single-token-scoped, signed by the sandbox's private key
+guard = Guard.from_token(encoded, secret, policy, audit=sink, pop_proof=proof)
+```
+
+A captured `encoded` string with no proof, or a proof from a different sandbox's key, is rejected even though the token's own signature checks out. Requires the `[pop]` extra (`pip install "agentguard[pop]"` — Ed25519 via `cryptography`); the core package stays zero-dependency, and omitting `pop_thumbprint`/`pop_proof` entirely is unchanged bearer-token behavior. Adapted from DPoP (RFC 9449) / the proof-of-possession pattern behind cloud agent-identity models, not adopted wholesale — DPoP proper binds a proof to an HTTP method+URI, which doesn't exist in agent-guard's actual seam (`dispatch(tool, args)`, a function call). Runnable demo, including the rejected-forgery case:
+
+```bash
+pip install "agentguard[pop]"
+python examples/pop_example.py
+```
 
 ## Isolation tiers & egress
 

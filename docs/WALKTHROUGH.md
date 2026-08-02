@@ -67,7 +67,11 @@ A tier is attested only when actually provided. If you request `remote.gvisor` b
 
 ### Audit
 
-Every call is recorded and attributed to the agent identity, via a JSONL or in-memory sink.
+Every call is recorded and attributed to the agent identity, via a JSONL, in-memory, webhook, or fan-out sink. Wrap any sink in `SigningAuditSink` to HMAC-sign each record — detects tampering by a party that doesn't hold the signing secret; does not defend against a compromised producer (which already holds the secret it would sign a forgery with) or suppression (a producer that simply never emits a record leaves no gap).
+
+### Holder-bound tokens (proof-of-possession)
+
+A minted token is a bearer credential by default — the encoded string alone is enough to use it, however obtained. Spawn a sandbox with `RuntimeSpec(pop_enabled=True)` and it generates an Ed25519 keypair; mint with `pop_thumbprint=sandbox.pop_thumbprint()` and the token becomes holder-bound. Using it then requires `sandbox.prove_possession(encoded)` — a fresh, single-token-scoped signed proof — passed to `Guard.from_token(..., pop_proof=proof)`. A captured token with no proof, or a proof from a different sandbox's key, is rejected even though the token's own signature is valid. Requires `pip install "agentguard[pop]"`; omitted entirely, behavior is unchanged.
 
 ### Harness-agnostic
 
@@ -120,6 +124,13 @@ Full four-pillars demo, no cloud:
 
 ```bash
 python examples/end_to_end.py
+```
+
+Proof-of-possession demo (holder-bound token, forged-proof rejection):
+
+```bash
+pip install "agentguard[pop]"
+python examples/pop_example.py
 ```
 
 gVisor isolation tier (needs docker + gVisor `runsc`):
