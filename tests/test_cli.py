@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from agent_guard.cli import main
 
 
@@ -194,3 +196,17 @@ def test_init_default_path_is_policy_yaml(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert main(["init"]) == 0
     assert (tmp_path / "policy.yaml").is_file()
+
+
+def test_starter_policy_matches_example_file():
+    """`guard init` ships a copy of policy.example.yaml embedded in the CLI so an
+    installed wheel needs no package data. Nothing else keeps the two in sync, so
+    editing one and not the other would hand new users a policy the docs don't
+    describe."""
+    yaml = pytest.importorskip("yaml")
+    from pathlib import Path
+
+    from agent_guard.cli import _STARTER_POLICY
+
+    example = Path(__file__).resolve().parent.parent / "policy.example.yaml"
+    assert yaml.safe_load(example.read_text(encoding="utf-8")) == _STARTER_POLICY
