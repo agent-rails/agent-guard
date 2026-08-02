@@ -17,6 +17,11 @@ class Token:
     scopes: tuple[str, ...]
     exp: float
     issuer: str = "agent-guard.local"
+    # Confirmation claim (RFC 7800-style): a PoPKeypair public-key thumbprint (see
+    # identity/pop.py). When set, this token is holder-bound — using it requires a
+    # fresh PoPProof signed by the matching private key, not just the bearer string.
+    # None means a plain bearer credential, same as every token before PoP existed.
+    cnf: str | None = None
 
     def expired(self, now: float | None = None) -> bool:
         return (now or time.time()) >= self.exp
@@ -56,6 +61,7 @@ def verify(encoded: str, secret: bytes, now: float | None = None) -> Token:
         scopes=tuple(payload["scopes"]),
         exp=payload["exp"],
         issuer=payload["issuer"],
+        cnf=payload.get("cnf"),
     )
     if token.expired(now):
         raise ValueError("token expired")
