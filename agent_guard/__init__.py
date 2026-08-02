@@ -5,7 +5,10 @@ from .audit import (
     JsonlAuditSink,
     MemoryAuditSink,
     MultiAuditSink,
+    SigningAuditSink,
     WebhookAuditSink,
+    sign_record,
+    verify_record,
 )
 from .bundled import bundled_module, bundled_names, with_bundled
 from .decision import Decision, Verdict, clamp
@@ -41,6 +44,7 @@ __all__ = [
     "PolicyModule",
     "PolicyRegistry",
     "Rule",
+    "SigningAuditSink",
     "TRUST_TIERS",
     "Verdict",
     "bundled_module",
@@ -50,5 +54,7 @@ __all__ = [
     "load_policy",
     "mcp_handle_line",
     "mcp_run_proxy",
+    "sign_record",
+    "verify_record",
     "with_bundled",
 ]

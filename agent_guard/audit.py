@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import urllib.error
 import urllib.request
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol
@@ -23,6 +26,7 @@ class AuditRecord:
     reason: str
     rule_id: str | None
     executed: bool
+    sig: str | None = None
 
 
 class AuditSink(Protocol):
@@ -92,6 +96,41 @@ class CallableAuditSink:
 
     def write(self, record: AuditRecord) -> None:
         self._emit(record)
+
+
+def _signable_body(record: AuditRecord) -> bytes:
+    payload = asdict(replace(record, sig=None))
+    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def sign_record(record: AuditRecord, secret: bytes) -> str:
+    mac = hmac.new(secret, _signable_body(record), hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(mac).decode()
+
+
+def verify_record(record: AuditRecord, secret: bytes) -> bool:
+    if record.sig is None:
+        return False
+    expected = hmac.new(secret, _signable_body(record), hashlib.sha256).digest()
+    return hmac.compare_digest(expected, base64.urlsafe_b64decode(record.sig))
+
+
+class SigningAuditSink:
+    """Wraps another sink and attaches an HMAC over each record before writing it, keyed
+    to a secret the producer holds. Without this, a compromised producer can call
+    `write()` with a forged or edited record and nothing downstream can tell — this
+    makes that tampering detectable (not preventable) by binding the signature to the
+    exact record content. Verify with `verify_record` against the same secret at the
+    consuming end."""
+
+    def __init__(self, inner: AuditSink, secret: bytes) -> None:
+        if not secret:
+            raise ValueError("SigningAuditSink requires a non-empty secret")
+        self._inner = inner
+        self._secret = secret
+
+    def write(self, record: AuditRecord) -> None:
+        self._inner.write(replace(record, sig=sign_record(record, self._secret)))
 
 
 class MultiAuditSink:
