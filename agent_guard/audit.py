@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
+import hmac
 import json
 import urllib.error
 import urllib.request
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol
@@ -23,6 +27,7 @@ class AuditRecord:
     reason: str
     rule_id: str | None
     executed: bool
+    sig: str | None = None
 
 
 class AuditSink(Protocol):
@@ -92,6 +97,53 @@ class CallableAuditSink:
 
     def write(self, record: AuditRecord) -> None:
         self._emit(record)
+
+
+def _signable_body(record: AuditRecord) -> bytes:
+    payload = asdict(replace(record, sig=None))
+    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def sign_record(record: AuditRecord, secret: bytes) -> str:
+    mac = hmac.new(secret, _signable_body(record), hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(mac).decode()
+
+
+def verify_record(record: AuditRecord, secret: bytes) -> bool:
+    if record.sig is None:
+        return False
+    try:
+        provided = base64.urlsafe_b64decode(record.sig)
+    except (binascii.Error, ValueError):
+        return False
+    expected = hmac.new(secret, _signable_body(record), hashlib.sha256).digest()
+    return hmac.compare_digest(expected, provided)
+
+
+class SigningAuditSink:
+    """Wraps another sink and attaches an HMAC over each record before writing it.
+
+    Defends against tampering AFTER a record leaves this process: a party that does
+    NOT hold `secret` (a downstream store, a network hop, a differently-privileged
+    service) cannot forge or edit a record without `verify_record` catching it.
+
+    Does NOT defend against a compromised producer — this process holds `secret` to
+    sign in the first place, so a compromised producer signs a forged record just as
+    validly as a real one. It also does not detect suppression: a producer that simply
+    never calls `write()` for an action leaves no gap here. Defending either of those
+    needs a different mechanism (e.g. a verify-only secret the producer can't reach,
+    plus sequence numbers or a hash chain across records) — not implemented here.
+
+    Verify with `verify_record` against the same secret at the consuming end."""
+
+    def __init__(self, inner: AuditSink, secret: bytes) -> None:
+        if not secret:
+            raise ValueError("SigningAuditSink requires a non-empty secret")
+        self._inner = inner
+        self._secret = secret
+
+    def write(self, record: AuditRecord) -> None:
+        self._inner.write(replace(record, sig=sign_record(record, self._secret)))
 
 
 class MultiAuditSink:

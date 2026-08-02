@@ -4,6 +4,8 @@ import functools
 from dataclasses import replace
 from typing import Any, Callable
 
+from identity.token import verify as verify_token
+
 from .audit import AuditSink, build_record
 from .decision import Decision, Verdict, clamp
 from .judge import Judge, JudgeRequest
@@ -34,6 +36,11 @@ def deny_by_default(_: ApprovalRequest) -> bool:
 
 
 class Guard:
+    """`agent_id` and `trust_tier` are trusted as given — the plain constructor is for
+    local/no-identity use, where the caller IS the authority. Once a `Broker` is in the
+    picture, construct via `from_token` instead, so trust_tier can only come from a
+    verified attestation and not from a hand-typed string."""
+
     def __init__(
         self,
         policy: Policy,
@@ -49,6 +56,40 @@ class Guard:
         self._approver = approver
         self._trust_tier = trust_tier
         self._judge = judge
+
+    @classmethod
+    def from_token(
+        cls,
+        encoded_token: str,
+        secret: bytes,
+        policy: Policy,
+        audit: AuditSink,
+        approver: HumanApprover = deny_by_default,
+        judge: Judge | None = None,
+        now: float | None = None,
+    ) -> Guard:
+        """Bind agent_id and trust_tier to a token that verifies against `secret` — the
+        same HMAC `identity.token.sign`/`Broker` use. Takes the encoded string, not a
+        bare `Token` object: `Token` is a plain public dataclass, so accepting one
+        directly would let a caller hand-construct `Token(trust_tier="remote.microvm",
+        ...)` and grant themselves the top tier without ever going through a Broker —
+        exactly the hand-typed-tier bypass this method exists to close. Requiring the
+        encoded+signed form means producing a valid one requires `secret`."""
+        if not isinstance(encoded_token, str):
+            raise TypeError(
+                "from_token expects an encoded, signed token string (identity.token.sign(token, secret)), "
+                "not a bare Token object — a Token can be hand-constructed with any trust_tier and carries "
+                "no signature on its own"
+            )
+        token = verify_token(encoded_token, secret, now)
+        return cls(
+            policy=policy,
+            audit=audit,
+            agent_id=token.agent_id,
+            approver=approver,
+            trust_tier=token.trust_tier,
+            judge=judge,
+        )
 
     def wrap(self, dispatch: ToolDispatch) -> ToolDispatch:
         def guarded(tool: str, args: dict[str, Any]) -> Any:

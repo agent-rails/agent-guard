@@ -3,6 +3,8 @@ from __future__ import annotations
 import pytest
 
 from agent_guard import BlockedError, Decision, Guard, MemoryAuditSink, Policy
+from identity import AttestationResult, Broker
+from identity.token import Token, sign
 
 
 def raw_dispatch(tool: str, args: dict) -> str:
@@ -140,3 +142,76 @@ def test_guard_carries_trust_tier():
 def test_unknown_tier_is_rejected():
     with pytest.raises(ValueError):
         tier_policy().evaluate("prod_write", {}, trust_tier="not-a-tier")
+
+
+SECRET = b"k"
+
+
+def mint_encoded(trust_tier: str, secret: bytes = SECRET, ttl_seconds: int = 300, now: float | None = None) -> str:
+    result = AttestationResult(verified=True, trust_tier=trust_tier, sandbox_id="s1", reason="test-stub")
+    token = Broker(secret=secret, ttl_seconds=ttl_seconds).mint(result, "human:x", {"a"}, {"a"}, now=now)
+    return sign(token, secret)
+
+
+def test_from_token_binds_trust_tier_not_a_typed_string():
+    encoded = mint_encoded("remote.microvm")
+    audit = MemoryAuditSink()
+    guard = Guard.from_token(encoded, SECRET, tier_policy(), audit=audit)
+    result = guard.call(raw_dispatch, "prod_write", {})
+    assert result == "ran:prod_write"
+    assert audit.records[-1].decision == "allow"
+
+
+def test_from_token_denies_when_tokens_tier_insufficient():
+    encoded = mint_encoded("local.process")
+    audit = MemoryAuditSink()
+    guard = Guard.from_token(encoded, SECRET, tier_policy(), audit=audit)
+    with pytest.raises(BlockedError):
+        guard.call(raw_dispatch, "prod_write", {})
+    assert audit.records[-1].executed is False
+
+
+def test_from_token_binds_agent_id_from_the_token():
+    encoded = mint_encoded("remote.microvm")
+    audit = MemoryAuditSink()
+    guard = Guard.from_token(encoded, SECRET, tier_policy(), audit=audit)
+    guard.call(raw_dispatch, "prod_write", {})
+    assert audit.records[-1].agent_id == "agent:s1"
+
+
+def test_from_token_rejects_expired_token():
+    encoded = mint_encoded("remote.microvm", ttl_seconds=1, now=1000.0)
+    with pytest.raises(ValueError):
+        Guard.from_token(encoded, SECRET, tier_policy(), audit=MemoryAuditSink(), now=2000.0)
+
+
+# Adversarial: these reproduce the exact bypasses a prior version of from_token allowed,
+# and assert they're now rejected. Passing tests here is what "verified" means, not
+# assuming the fix works because the happy-path tests above pass.
+
+
+def test_from_token_rejects_a_hand_constructed_token_object():
+    forged = Token(
+        subject="human:x",
+        agent_id="agent:forged",
+        sandbox_id="s1",
+        trust_tier="remote.microvm",
+        scopes=(),
+        exp=10**12,
+    )
+    with pytest.raises(TypeError):
+        Guard.from_token(forged, SECRET, tier_policy(), audit=MemoryAuditSink())
+
+
+def test_from_token_rejects_a_tampered_signature():
+    encoded = mint_encoded("local.process")
+    body, _, sig = encoded.rpartition(".")
+    tampered = f"{body}.{sig[:-4]}AAAA"
+    with pytest.raises(ValueError):
+        Guard.from_token(tampered, SECRET, tier_policy(), audit=MemoryAuditSink())
+
+
+def test_from_token_rejects_a_token_signed_with_a_different_secret():
+    encoded = mint_encoded("remote.microvm", secret=b"attacker-controlled-secret")
+    with pytest.raises(ValueError):
+        Guard.from_token(encoded, SECRET, tier_policy(), audit=MemoryAuditSink())

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 
-from agent_guard import Decision, MemoryAuditSink, MultiAuditSink, Verdict, WebhookAuditSink
-from agent_guard.audit import build_record
+from agent_guard import Decision, MemoryAuditSink, MultiAuditSink, SigningAuditSink, Verdict, WebhookAuditSink
+from agent_guard.audit import build_record, sign_record, verify_record
 
 
 def a_record():
@@ -53,3 +54,49 @@ def test_multi_attempts_all_then_raises():
     with pytest.raises(RuntimeError):
         MultiAuditSink(local, remote).write(a_record())
     assert len(local.records) == 1  # durable local audit survived the remote failure
+
+
+def test_signing_sink_requires_a_secret():
+    with pytest.raises(ValueError):
+        SigningAuditSink(MemoryAuditSink(), secret=b"")
+
+
+def test_signing_sink_attaches_a_verifiable_signature():
+    inner = MemoryAuditSink()
+    SigningAuditSink(inner, secret=b"k").write(a_record())
+    assert verify_record(inner.records[-1], b"k") is True
+
+
+def test_unsigned_record_fails_verification():
+    assert verify_record(a_record(), b"k") is False
+
+
+def test_tampered_record_fails_verification():
+    inner = MemoryAuditSink()
+    SigningAuditSink(inner, secret=b"k").write(a_record())
+    tampered = replace(inner.records[-1], executed=True)
+    assert verify_record(tampered, b"k") is False
+
+
+def test_wrong_secret_fails_verification():
+    inner = MemoryAuditSink()
+    SigningAuditSink(inner, secret=b"k").write(a_record())
+    assert verify_record(inner.records[-1], b"wrong-secret") is False
+
+
+def test_malformed_signature_fails_closed_instead_of_raising():
+    # "not-valid-base64!!!" would NOT trigger this: urlsafe_b64decode silently drops the
+    # "!!!" and returns garbage bytes without raising, so that input can't distinguish
+    # fixed from unfixed code. "A" has invalid base64 padding and genuinely raises
+    # binascii.Error pre-fix — this is the input that actually exercises the except branch.
+    malformed = replace(a_record(), sig="A")
+    assert verify_record(malformed, b"k") is False
+
+
+def test_a_party_with_the_secret_can_forge_a_valid_looking_record():
+    """Locks in the honest limit stated in SigningAuditSink's docstring: this defends
+    against a party that does NOT hold the secret, not a compromised producer that
+    does — anyone holding `secret` can sign whatever they want and it verifies clean."""
+    forged = replace(a_record(), executed=True, reason="i was never actually blocked")
+    forged = replace(forged, sig=sign_record(forged, b"k"))
+    assert verify_record(forged, b"k") is True

@@ -32,12 +32,16 @@ def _canonical(payload: dict) -> bytes:
 
 
 def sign(token: Token, secret: bytes) -> str:
+    if not secret:
+        raise ValueError("sign requires a non-empty secret")
     body = _canonical(token.payload())
     mac = hmac.new(secret, body, hashlib.sha256).digest()
     return base64.urlsafe_b64encode(body).decode() + "." + base64.urlsafe_b64encode(mac).decode()
 
 
 def verify(encoded: str, secret: bytes, now: float | None = None) -> Token:
+    if not secret:
+        raise ValueError("verify requires a non-empty secret")
     body_b64, mac_b64 = encoded.split(".", 1)
     body = base64.urlsafe_b64decode(body_b64)
     expected = hmac.new(secret, body, hashlib.sha256).digest()
