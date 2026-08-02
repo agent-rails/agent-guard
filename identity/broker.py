@@ -24,7 +24,13 @@ class Broker:
         human_grant: set[str],
         task_scope: set[str],
         now: float | None = None,
+        pop_thumbprint: str | None = None,
     ) -> Token:
+        """`pop_thumbprint` (optional): a PoPKeypair.thumbprint() (identity/pop.py) the
+        caller holds the private key for. When given, the minted Token is holder-bound
+        via its `cnf` claim — presenting the encoded token alone won't be enough to use
+        it, a fresh PoPProof signed by that key is also required. Omit for a plain
+        bearer token, unchanged from before PoP existed."""
         if not attestation.verified:
             raise RefusedError(f"unverified attestation, no token minted: {attestation.reason}")
         now = now or time.time()
@@ -36,4 +42,5 @@ class Broker:
             trust_tier=attestation.trust_tier,
             scopes=tuple(sorted(scopes)),
             exp=now + self._ttl,
+            cnf=pop_thumbprint,
         )

@@ -4,6 +4,7 @@ import pytest
 
 from agent_guard import BlockedError, Decision, Guard, MemoryAuditSink, Policy
 from identity import AttestationResult, Broker
+from identity.pop import PoPKeypair
 from identity.token import Token, sign
 
 
@@ -215,3 +216,58 @@ def test_from_token_rejects_a_token_signed_with_a_different_secret():
     encoded = mint_encoded("remote.microvm", secret=b"attacker-controlled-secret")
     with pytest.raises(ValueError):
         Guard.from_token(encoded, SECRET, tier_policy(), audit=MemoryAuditSink())
+
+
+# Proof-of-possession (holder-bound tokens, identity/pop.py). These tests exist
+# specifically to demonstrate the property PoP adds beyond what from_token already
+# checked above: a leaked/stolen ENCODED TOKEN STRING alone, with no other change,
+# must not be enough to use a holder-bound token.
+
+
+def mint_pop_bound(trust_tier: str = "remote.microvm") -> tuple[str, PoPKeypair]:
+    keypair = PoPKeypair.generate()
+    result = AttestationResult(verified=True, trust_tier=trust_tier, sandbox_id="s1", reason="test-stub")
+    token = Broker(secret=SECRET).mint(result, "human:x", {"a"}, {"a"}, pop_thumbprint=keypair.thumbprint())
+    return sign(token, SECRET), keypair
+
+
+def test_from_token_succeeds_with_a_valid_matching_proof():
+    encoded, keypair = mint_pop_bound()
+    proof = keypair.prove(encoded)
+    audit = MemoryAuditSink()
+    guard = Guard.from_token(encoded, SECRET, tier_policy(), audit=audit, pop_proof=proof)
+    result = guard.call(raw_dispatch, "prod_write", {})
+    assert result == "ran:prod_write"
+
+
+def test_from_token_rejects_holder_bound_token_with_no_proof_at_all():
+    # The exact scenario PoP exists for: someone has the encoded bearer string (e.g.
+    # captured from a log or a network hop) but not the private key.
+    encoded, _keypair = mint_pop_bound()
+    with pytest.raises(ValueError, match="no pop_proof"):
+        Guard.from_token(encoded, SECRET, tier_policy(), audit=MemoryAuditSink())
+
+
+def test_from_token_rejects_proof_from_the_wrong_keypair():
+    encoded, _real_keypair = mint_pop_bound()
+    attacker_keypair = PoPKeypair.generate()
+    forged_proof = attacker_keypair.prove(encoded)
+    with pytest.raises(ValueError, match="pop_proof failed"):
+        Guard.from_token(encoded, SECRET, tier_policy(), audit=MemoryAuditSink(), pop_proof=forged_proof)
+
+
+def test_from_token_rejects_a_stale_proof():
+    encoded, keypair = mint_pop_bound()
+    stale_proof = keypair.prove(encoded, now=1000.0)
+    with pytest.raises(ValueError, match="pop_proof failed"):
+        Guard.from_token(encoded, SECRET, tier_policy(), audit=MemoryAuditSink(), pop_proof=stale_proof, now=2000.0)
+
+
+def test_plain_bearer_token_without_cnf_still_works_with_no_proof():
+    # Backward compatibility: PoP is opt-in per token via Broker's pop_thumbprint param.
+    # A token minted without it behaves exactly as before PoP existed.
+    encoded = mint_encoded("remote.microvm")
+    audit = MemoryAuditSink()
+    guard = Guard.from_token(encoded, SECRET, tier_policy(), audit=audit)
+    result = guard.call(raw_dispatch, "prod_write", {})
+    assert result == "ran:prod_write"
