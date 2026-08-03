@@ -4,6 +4,13 @@ Notable changes. This project follows [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- CLI: `guard check` — companion to `guard explain` for tool shapes explain's
+  `{"cmd": ...}`-only CLI can't express. Reads a `{"tool": ..., "args": {...}}`
+  payload from stdin, evaluates via `Guard` (so it can also write to an audit
+  sink via `--audit`), exits with the same code convention as `explain`. The
+  bundled `policy.write-content-scan.example.yaml` example policy (added earlier)
+  was previously reachable only from Python — this gives it a CLI path too.
+
 ## [0.1.0] - 2026-08-02
 
 Initial public release. (An earlier `v0.0.1` git tag existed but was never published to PyPI or released on GitHub — this is the actual first release; nothing prior to it was ever installable.)

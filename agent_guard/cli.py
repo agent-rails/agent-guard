@@ -339,6 +339,74 @@ def _explain(args) -> int:
     return 4
 
 
+def _check(args) -> int:
+    """Evaluate an arbitrary {"tool": ..., "args": {...}} payload from stdin
+    -- no execution. Companion to `guard explain`: explain's CLI only wraps
+    a command string as {"cmd": ...}; check takes any tool/args shape (a
+    file write's {"content": ...}, for instance), so callers who aren't
+    Python (a shell hook, for instance) can still reuse the same
+    deterministic Guard/Policy engine `guard run` uses, including writing
+    to an audit sink via --audit.
+
+    Exit codes match `guard explain`:
+      0 allow (or default allow)
+      3 deny
+      4 require_human
+      1 usage error / malformed payload
+    """
+    import json
+
+    try:
+        raw = sys.stdin.read()
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError) as err:
+        print(f"malformed JSON payload on stdin: {err}", file=sys.stderr)
+        return 1
+
+    if not isinstance(payload, dict):
+        print('payload must be a JSON object: {"tool": "...", "args": {...}}', file=sys.stderr)
+        return 1
+
+    tool = payload.get("tool")
+    tool_args = payload.get("args")
+    if not isinstance(tool, str) or not tool or not isinstance(tool_args, dict):
+        print('payload must be {"tool": "...", "args": {...}} — "tool" must be a non-empty string', file=sys.stderr)
+        return 1
+
+    policy = _resolve_policy(args)
+    audit = JsonlAuditSink(args.audit) if args.audit else MemoryAuditSink()
+    guard = Guard(policy, audit=audit, agent_id=args.agent_id, trust_tier=args.trust_tier)
+
+    _allowed, verdict = guard.decide(tool, tool_args)
+    # check never executes the underlying action itself -- the caller (e.g. a
+    # hook script) does that separately based on the exit code, so executed
+    # is always False here, same as explain's "no execution" positioning.
+    guard.record(tool, tool_args, verdict, executed=False)
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "tool": tool,
+                    "decision": verdict.decision.value,
+                    "rule_id": verdict.rule_id,
+                    "reason": verdict.reason,
+                }
+            )
+        )
+    else:
+        print(f"check: {tool} {json.dumps(tool_args, sort_keys=True, default=str)}")
+        print(f"decision: {verdict.decision.value}")
+        print(f"rule_id: {verdict.rule_id or '(none)'}")
+        print(f"reason: {verdict.reason}")
+
+    if verdict.decision is Decision.ALLOW:
+        return 0
+    if verdict.decision is Decision.DENY:
+        return 3
+    return 4
+
+
 # Starter policy for `guard init`. Dict form is the source of truth; YAML/JSON
 # serializers derive from it so an installed wheel works without package data.
 _STARTER_POLICY: dict = {
@@ -531,6 +599,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     explain.add_argument("command", nargs=argparse.REMAINDER, help="-- command to explain")
     explain.set_defaults(func=_explain)
+
+    check = sub.add_parser(
+        "check",
+        help='evaluate a {"tool": ..., "args": {...}} payload from stdin (no execution)',
+        description=(
+            'Companion to `guard explain` for tool shapes explain\'s {"cmd": ...}-only '
+            "CLI can't express. Reads JSON from stdin, evaluates via Guard, exits with "
+            "the same code convention as explain (0 allow, 3 deny, 4 require_human)."
+        ),
+    )
+    check.add_argument("--policy", help="policy file (yaml/json); default is the same built-in policy as `guard run`")
+    check.add_argument("--audit", help="append audit records to this JSONL file")
+    check.add_argument("--agent-id", default="check-caller")
+    check.add_argument(
+        "--trust-tier",
+        default="local.process",
+        help="caller trust tier used for min_trust_tier rules (default: local.process)",
+    )
+    check.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    check.set_defaults(func=_check)
 
     init = sub.add_parser(
         "init",
