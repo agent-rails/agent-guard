@@ -11,7 +11,7 @@ flowchart TB
     subgraph identity["agentguard_identity (who / where)"]
         Attestor["Attestor\n(LocalAttestor / ProviderAttestor)"]
         Broker["Broker\n(mint scoped Token)"]
-        Runtime["Runtime\n(Local / Container / Remote)"]
+        Runtime["Runtime\n(Local / Container / E2B)"]
         Sandbox["Sandbox\n(attest / dispatch / close)"]
         PoP["PoPKeypair\n(optional holder-binding)"]
     end

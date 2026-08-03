@@ -1,6 +1,6 @@
 # Threat model
 
-What agent-guard defends against, per pillar, framed as Prevent / Contain / Detect — and, just as deliberately, what it does not defend against. Every claim below is grounded in this project's actual code and tests, not aspiration; where a gap was found and closed during development, that's cited by PR so the claim is checkable, not asserted.
+What agent-guard defends against, per pillar, framed as Prevent / Contain / Detect — and, just as deliberately, what it does not defend against. Every claim below is grounded in this project's actual code and tests, not aspiration; where a gap was found and closed during development, that's described here and cross-checked directly against the current source and test suite (see `docs/Evaluation.md` for the full findings history), not merely asserted.
 
 ## Assets
 
@@ -86,5 +86,5 @@ This is the newest, and the one where the actual attack surface is a different s
 
 - **Prompt injection causing the agent to construct a plausible-looking but genuinely novel malicious call** is not eliminated by a deterministic ruleset — only mitigated by keeping the ruleset narrow, tested, and paired with isolation as a second layer.
 - **Credential-shape detection does not exist** — only literal keyword matching. A real secret without one of the matched words is invisible to this policy.
-- **Every security review this project has had was same-vendor** (the `worf` reviewer, standing in for an unavailable cross-vendor `spock`/codex pass). Genuine cross-vendor reasoning diversity — the thing most likely to catch a blind spot this project's own model family shares — has not yet happened for any of this work.
+- **Every security review this project has had was same-vendor** (a same-model-family adversarial reviewer, standing in for an unavailable cross-vendor pass). Genuine cross-vendor reasoning diversity — the thing most likely to catch a blind spot this project's own model family shares — has not yet happened for any of this work.
 - **The project has never been published or run outside this development process.** Nothing here has adversarial-in-the-wild experience; every finding to date came from structured internal review, not real-world attack traffic.
