@@ -22,15 +22,17 @@ done
 
 ```bash
 pytest --collect-only -q   # count
-pytest -q                  # runtime (excluding docker/gVisor/E2B-gated tests)
+pytest -q                  # runtime
 ```
 
 | Metric | Value |
 |---|---|
 | Test files | 18 |
 | Tests collected | 183 |
-| Tests run (excluding env-gated: docker/gVisor/E2B) | 168 passed |
-| Full-suite wall time | 0.68s |
+| Result | 178 passed, 5 skipped |
+| Full-suite wall time | ~1.1s |
+
+**Corrected during review:** an earlier draft of this table reported "168 passed" from a manually `-k`-filtered run that excluded docker/gVisor/E2B-related tests wholesale. That was unnecessarily conservative — the suite already gates those tests properly with `pytest.mark.skipif` (only 5 genuinely need an unavailable environment: live Docker, gVisor, or an E2B account). A plain `pytest -q`, no manual filter, runs 10 more tests than the filtered command did and they pass — the filtered number understated what this suite actually verifies on a bare `pytest -q` invocation.
 
 Sub-second for the full non-gated suite — cheap enough to run before every commit without friction, which is why the development process this session used (run the suite after every change, not just before a PR) was viable at all.
 
