@@ -10,6 +10,8 @@ Harness-agnostic by design: it wraps a plain `dispatch(tool, args)` function, wh
 
 New here? Start with the [walkthrough](docs/WALKTHROUGH.md) — what it solves, how it works, how to run it, and where an LLM judge fits.
 
+Deeper reference: [`docs/DESIGN.md`](docs/DESIGN.md) (why it's shaped this way), [`docs/Architecture.md`](docs/Architecture.md) (component/sequence diagrams), [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) (what's defended, and what explicitly isn't), [`docs/Evaluation.md`](docs/Evaluation.md) (real findings from development, not a hypothetical test plan), [`docs/Benchmarks.md`](docs/Benchmarks.md) (measured numbers).
+
 ## The problem
 
 Agents run with their operator's full permissions and no record of what they did. One prompt injection reaches everything the human can touch. `agent-guard` puts a policy-as-code boundary in front of the tool call, so an agent physically cannot run an irreversible action that policy forbids — and every attempt is auditable.
