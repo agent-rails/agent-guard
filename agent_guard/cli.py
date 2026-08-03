@@ -604,7 +604,7 @@ def build_parser() -> argparse.ArgumentParser:
         "check",
         help='evaluate a {"tool": ..., "args": {...}} payload from stdin (no execution)',
         description=(
-            "Companion to `guard explain` for tool shapes explain's {\"cmd\": ...}-only "
+            'Companion to `guard explain` for tool shapes explain\'s {"cmd": ...}-only '
             "CLI can't express. Reads JSON from stdin, evaluates via Guard, exits with "
             "the same code convention as explain (0 allow, 3 deny, 4 require_human)."
         ),
