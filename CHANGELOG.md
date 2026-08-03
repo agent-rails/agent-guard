@@ -7,8 +7,9 @@ Notable changes. This project follows [Semantic Versioning](https://semver.org).
 - CLI: `guard check` — companion to `guard explain` for tool shapes explain's
   `{"cmd": ...}`-only CLI can't express. Reads a `{"tool": ..., "args": {...}}`
   payload from stdin, evaluates via `Guard` (so it can also write to an audit
-  sink via `--audit`), exits with the same code convention as `explain`.
-  Added: `write-content-scan.example.yaml`'s policy is otherwise Python-only.
+  sink via `--audit`), exits with the same code convention as `explain`. The
+  bundled `write-content-scan.example.yaml` example policy (added earlier)
+  was previously reachable only from Python — this gives it a CLI path too.
 
 ## [0.1.0] - 2026-08-02
 

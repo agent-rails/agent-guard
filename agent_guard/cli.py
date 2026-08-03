@@ -356,17 +356,21 @@ def _check(args) -> int:
     """
     import json
 
-    raw = sys.stdin.read()
     try:
+        raw = sys.stdin.read()
         payload = json.loads(raw)
-    except json.JSONDecodeError as err:
+    except (json.JSONDecodeError, UnicodeDecodeError) as err:
         print(f"malformed JSON payload on stdin: {err}", file=sys.stderr)
+        return 1
+
+    if not isinstance(payload, dict):
+        print('payload must be a JSON object: {"tool": "...", "args": {...}}', file=sys.stderr)
         return 1
 
     tool = payload.get("tool")
     tool_args = payload.get("args")
-    if not tool or not isinstance(tool_args, dict):
-        print('payload must be {"tool": "...", "args": {...}}', file=sys.stderr)
+    if not isinstance(tool, str) or not tool or not isinstance(tool_args, dict):
+        print('payload must be {"tool": "...", "args": {...}} — "tool" must be a non-empty string', file=sys.stderr)
         return 1
 
     policy = _resolve_policy(args)

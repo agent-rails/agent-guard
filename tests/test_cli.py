@@ -214,14 +214,40 @@ def test_check_missing_tool_or_args_errors(monkeypatch):
     assert _check_with_stdin(monkeypatch, [], '{"tool": "shell"}') == 1
 
 
-def test_check_never_spawns_a_subprocess(monkeypatch):
-    # check is a dry-run: it must never execute anything, only decide.
-    import subprocess
+def test_check_non_object_json_payload_fails_closed_not_a_traceback(monkeypatch, capsys):
+    # Caught in review: a JSON array/scalar/null/bool is valid JSON but not a
+    # payload object -- payload.get("tool") on a list previously raised an
+    # unhandled AttributeError instead of the documented clean exit-1 error.
+    for payload in ["[1, 2]", "null", '"hello"', "true", "123"]:
+        code = _check_with_stdin(monkeypatch, [], payload)
+        assert code == 1
+        assert "payload must be a JSON object" in capsys.readouterr().err
+
+
+def test_check_non_string_tool_fails_closed_not_a_traceback(monkeypatch, capsys):
+    # Caught in review: {"tool": 123, ...} passed the old `if not tool` check
+    # (int 123 is truthy) and reached the policy engine, crashing in fnmatch
+    # with an unhandled TypeError instead of failing closed cleanly.
+    code = _check_with_stdin(monkeypatch, [], '{"tool": 123, "args": {}}')
+    assert code == 1
+    assert "must be a non-empty string" in capsys.readouterr().err
+
+
+def test_check_builds_no_dispatch_and_never_calls_guard_call(monkeypatch):
+    # Flagged in review: a subprocess.run monkeypatch can never actually fire
+    # here, because _check never wires a dispatch at all -- that made the
+    # previous version of this test near-vacuous (green regardless of
+    # whether check executes anything). The real "never executes" guarantee
+    # is structural: _check calls guard.decide() directly, never guard.call()
+    # or guard.wrap(), so no dispatch function is ever invoked. Assert that
+    # structural fact instead of a monkeypatch that can't be exercised.
+    from agent_guard import Guard
 
     def boom(*a, **kw):
-        raise AssertionError("check must never spawn a subprocess")
+        raise AssertionError("check must never call Guard.call/Guard.wrap -- decide() only")
 
-    monkeypatch.setattr(subprocess, "run", boom)
+    monkeypatch.setattr(Guard, "call", boom)
+    monkeypatch.setattr(Guard, "wrap", boom)
     code = _check_with_stdin(monkeypatch, [], '{"tool": "shell", "args": {"cmd": "echo hi"}}')
     assert code == 0
 
