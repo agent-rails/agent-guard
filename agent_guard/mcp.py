@@ -19,11 +19,22 @@ def _blocked_response(msg_id: Any, reason: str) -> str:
     )
 
 
+def _rejected_response(reason: str) -> str:
+    return json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": reason}})
+
+
 def handle_line(line: str, guard: Guard) -> tuple[str | None, str | None]:
     """Core proxy decision, pure and testable. Returns (forward_to_server, reply_to_client).
     Non-JSON and non-`tools/call` messages pass straight through. A `tools/call` is
     evaluated by the guard: allowed -> forward; blocked -> a tool-error reply to the
-    client, the server never sees it. Exactly one of the tuple slots is set."""
+    client, the server never sees it. Exactly one of the tuple slots is set.
+
+    JSON-RPC batch framing (a top-level array) is rejected outright rather than
+    forwarded: this proxy only inspects dict-shaped messages, so an array would
+    otherwise reach the wrapped server completely unguarded -- a denied tools/call
+    wrapped in a batch would bypass Policy entirely. Batching was removed in the
+    2025-06-18 MCP spec, but older-spec servers still accept it, so the bypass is
+    real wherever this proxy fronts one. Fail closed instead."""
     stripped = line.strip()
     if not stripped:
         return None, None
@@ -31,12 +42,19 @@ def handle_line(line: str, guard: Guard) -> tuple[str | None, str | None]:
         msg = json.loads(stripped)
     except json.JSONDecodeError:
         return line, None
+    if isinstance(msg, list):
+        return None, _rejected_response("batched JSON-RPC requests are not supported by this proxy")
     if not isinstance(msg, dict) or msg.get("method") != "tools/call":
         return line, None
 
-    params = msg.get("params") or {}
+    params = msg.get("params")
+    if not isinstance(params, dict):
+        return None, _blocked_response(msg.get("id"), "malformed tools/call: 'params' must be an object")
     name = params.get("name", "")
-    args = params.get("arguments") or {}
+    raw_args = params.get("arguments")
+    if raw_args is not None and not isinstance(raw_args, dict):
+        return None, _blocked_response(msg.get("id"), "malformed tools/call: 'arguments' must be an object")
+    args = raw_args or {}
     allowed, verdict = guard.decide(name, args)
     guard.record(name, args, verdict, executed=allowed)
     if allowed:

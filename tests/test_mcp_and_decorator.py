@@ -95,3 +95,32 @@ def test_decorator_uses_function_name_by_default():
         return "ok"
 
     assert run_sql(q="SELECT 1") == "ok"
+
+
+def test_batch_framed_tool_call_is_rejected_not_forwarded():
+    """A JSON-RPC batch (top-level array) must never reach the wrapped server
+    unguarded -- a denied tools/call wrapped in a batch used to bypass Policy
+    entirely because handle_line only inspected dict-shaped messages."""
+    audit = MemoryAuditSink()
+    batch = json.dumps([json.loads(call_msg("run_sql", {"q": "DROP TABLE users"}))])
+    forward, reply = mcp_handle_line(batch, a_guard(audit))
+    assert forward is None
+    payload = json.loads(reply)
+    assert payload["error"]["code"] == -32600
+    assert not audit.records
+
+
+def test_malformed_params_blocked_not_crashed():
+    msg = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": ["not", "a", "dict"]})
+    forward, reply = mcp_handle_line(msg, a_guard())
+    assert forward is None
+    assert "params" in json.loads(reply)["result"]["content"][0]["text"]
+
+
+def test_malformed_arguments_blocked_not_crashed():
+    msg = json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "run_sql", "arguments": "not a dict"}}
+    )
+    forward, reply = mcp_handle_line(msg, a_guard())
+    assert forward is None
+    assert "arguments" in json.loads(reply)["result"]["content"][0]["text"]
