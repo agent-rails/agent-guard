@@ -31,9 +31,13 @@ class EgressPolicy:
         return cls(default="allow")
 
     def allows(self, host: str) -> bool:
-        if self.default == "allow":
-            return True
-        return host in self.allow_hosts
+        if self.allow_hosts:
+            # network_args() refuses to build a container for any policy that sets
+            # allow_hosts (no egress proxy ships in the MVP to enforce it) — allows()
+            # must fail the same way instead of claiming a host is usable when no
+            # container could ever actually be spawned to enforce that claim.
+            raise NotImplementedError("host allowlist needs an egress proxy; not in MVP — use deny_all or allow_all")
+        return self.default == "allow"
 
     def network_args(self, engine: str) -> list[str]:
         if self.allow_hosts:
