@@ -163,7 +163,7 @@ WORKSPACE_ROOT = "/workspace"
 # "; id", "/e?c/passwd" (glob), "/e''tc/passwd" (quote-split), "/*/passwd".
 # A denylist over pre-shell text cannot be the control -- validate the
 # resolved path lexically instead, then additionally shell-quote it.
-_DISALLOWED_PATH_CHARS = set(";&|`$(){}<>\n\"'*?[]~")
+_DISALLOWED_PATH_CHARS = set(";&|`$(){}<>\n\"'*?[]~\x00")
 
 
 def _safe_workspace_path(raw: str) -> str:
@@ -173,7 +173,14 @@ def _safe_workspace_path(raw: str) -> str:
     reject anything that would escape the workspace or contains a shell
     metacharacter/quote/glob character. Raises ValueError -- the caller
     turns that into a model-readable tool error via ToolRegistry.dispatch's
-    own broad except, same as any other tool failure."""
+    own broad except, same as any other tool failure.
+
+    This is purely lexical, matching the target: the CONTAINER's
+    filesystem, which this process can't stat. A path that's lexically
+    inside /workspace could still resolve outside it at runtime via a
+    symlink planted in the image -- not reachable today (the image's
+    workspace/ has three regular files, no symlinks, verified at build
+    time), but worth knowing if this image ever grows one."""
     if not raw or any(ch in raw for ch in _DISALLOWED_PATH_CHARS):
         raise ValueError(f"path rejected: contains a disallowed character ({raw!r})")
     joined = raw if raw.startswith("/") else posixpath.join(WORKSPACE_ROOT, raw)
