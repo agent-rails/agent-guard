@@ -6,6 +6,7 @@ import subprocess
 import sys
 
 from agent_guard import (
+    TRUST_TIERS,
     BlockedError,
     Decision,
     Guard,
@@ -264,6 +265,18 @@ def _rules(args) -> int:
     return 0
 
 
+def _valid_trust_tier(args) -> str | None:
+    """Validate --trust-tier up front so an unknown tier fails clean instead of
+    raising an unhandled ValueError from deep inside Policy.evaluate/explain --
+    the same "no traceback leaking filesystem paths to stderr" contract the
+    malformed-stdin path in `check` already has (see docs/THREAT_MODEL.md
+    Pillar 5). Returns the tier if valid, prints and returns None if not."""
+    if args.trust_tier not in TRUST_TIERS:
+        print(f"unknown --trust-tier {args.trust_tier!r}; expected one of {TRUST_TIERS}", file=sys.stderr)
+        return None
+    return args.trust_tier
+
+
 def _resolve_policy(args) -> Policy:
     if getattr(args, "policy", None):
         return load_policy(args.policy)
@@ -289,6 +302,10 @@ def _explain(args) -> int:
         print("nothing to explain; usage: guard explain -- <command>", file=sys.stderr)
         return 1
 
+    trust_tier = _valid_trust_tier(args)
+    if trust_tier is None:
+        return 1
+
     tool = args.tool
     if tool == "shell":
         tool_args = {"cmd": " ".join(command)}
@@ -296,7 +313,7 @@ def _explain(args) -> int:
         tool_args = {"cmd": " ".join(command)} if command else {}
 
     policy = _resolve_policy(args)
-    detail = policy.explain(tool, tool_args, args.trust_tier)
+    detail = policy.explain(tool, tool_args, trust_tier)
 
     if args.json:
         print(json.dumps(detail, indent=2))
@@ -373,9 +390,13 @@ def _check(args) -> int:
         print('payload must be {"tool": "...", "args": {...}} — "tool" must be a non-empty string', file=sys.stderr)
         return 1
 
+    trust_tier = _valid_trust_tier(args)
+    if trust_tier is None:
+        return 1
+
     policy = _resolve_policy(args)
     audit = JsonlAuditSink(args.audit) if args.audit else MemoryAuditSink()
-    guard = Guard(policy, audit=audit, agent_id=args.agent_id, trust_tier=args.trust_tier)
+    guard = Guard(policy, audit=audit, agent_id=args.agent_id, trust_tier=trust_tier)
 
     _allowed, verdict = guard.decide(tool, tool_args)
     # check never executes the underlying action itself -- the caller (e.g. a

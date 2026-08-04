@@ -24,7 +24,7 @@ class Token:
     cnf: str | None = None
 
     def expired(self, now: float | None = None) -> bool:
-        return (now or time.time()) >= self.exp
+        return (now if now is not None else time.time()) >= self.exp
 
     def payload(self) -> dict:
         data = asdict(self)

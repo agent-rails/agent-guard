@@ -114,6 +114,17 @@ def test_nan_iat_does_not_bypass_the_freshness_window():
     assert verify_pop(proof, "some-encoded-token", keypair.thumbprint(), now=2000.0) is False
 
 
+def test_non_numeric_iat_fails_closed_not_raises():
+    # Caught in review: verify_pop's own docstring promises "never raises, fail-closed
+    # ... a malformed/adversarial proof field" -- but a non-numeric iat (exactly what
+    # arrives when a PoPProof is built from attacker-controlled JSON) reached a bare
+    # math.isfinite() call outside the try/except and raised TypeError instead.
+    keypair = PoPKeypair.generate()
+    for bad_iat in ("not-a-number", None, [], {}, True):
+        bad = replace(keypair.prove("some-encoded-token", now=1000.0), iat=bad_iat)
+        assert verify_pop(bad, "some-encoded-token", keypair.thumbprint(), now=1000.0) is False
+
+
 def test_cnf_cannot_be_stripped_to_downgrade_a_holder_bound_token_to_bearer():
     # The load-bearing invariant: cnf lives inside the HMAC-signed payload, so it
     # can't be removed/altered without invalidating the signature. If a future refactor

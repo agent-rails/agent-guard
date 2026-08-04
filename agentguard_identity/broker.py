@@ -33,7 +33,7 @@ class Broker:
         bearer token, unchanged from before PoP existed."""
         if not attestation.verified:
             raise RefusedError(f"unverified attestation, no token minted: {attestation.reason}")
-        now = now or time.time()
+        now = now if now is not None else time.time()
         scopes = human_grant & task_scope
         return Token(
             subject=subject,
