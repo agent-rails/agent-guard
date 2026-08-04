@@ -24,10 +24,14 @@ def test_host_allowlist_fails_loud():
         policy.network_args("docker")
 
 
-def test_allows_membership():
+def test_allows_fails_loud_same_as_network_args():
+    """allows() and network_args() must agree: neither can claim an allowlisted host
+    is usable when no container could ever actually be spawned to enforce it."""
     policy = EgressPolicy(default="deny", allow_hosts=("example.com",))
-    assert policy.allows("example.com")
-    assert not policy.allows("evil.com")
+    with pytest.raises(NotImplementedError):
+        policy.allows("example.com")
+    with pytest.raises(NotImplementedError):
+        policy.allows("evil.com")
 
 
 def test_allow_all_allows_any_host():

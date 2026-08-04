@@ -113,12 +113,43 @@ def test_remote_sandbox_attests_as_gvisor_not_microvm():
     assert att.runtime_kind == "remote.gvisor"
 
 
+def test_remote_sandbox_attest_after_close_raises():
+    sandbox = RemoteSandbox(FakeRemoteClient())
+    sandbox.close()
+    with pytest.raises(RuntimeError):
+        sandbox.attest()
+
+
 def test_provider_attestor_gates_on_template():
     att = RemoteSandbox(FakeRemoteClient()).attest()
     ok = ProviderAttestor({"trusted-template"}).verify(att)
     assert ok.verified is True and ok.trust_tier == "remote.gvisor"
     bad = ProviderAttestor({"other"}).verify(att)
     assert bad.verified is False
+
+
+def test_judge_cannot_escalate_past_rule_decision():
+    """A rule authored decision=deny + judge_ceiling=allow must never let a judge
+    escalate the final decision past DENY -- the rule's own decision is the hard
+    boundary static policy set; judge_ceiling can only narrow it further."""
+    from agent_guard.policy import Policy, Rule
+
+    rule = Rule(id="r", decision=Decision.DENY, tools=["*"], judge=True, judge_ceiling=Decision.ALLOW)
+    policy = Policy(default=Decision.DENY, rules=[rule])
+    always_allow = LLMJudge(complete=lambda p: "VERDICT: ALLOW — fine")
+    guard = Guard(policy, audit=MemoryAuditSink(), agent_id="a", judge=always_allow)
+    with pytest.raises(BlockedError):
+        guard.call(raw_dispatch, "anything", {})
+
+
+def test_rule_from_dict_rejects_ceiling_above_decision():
+    with pytest.raises(ValueError, match="more permissive"):
+        PolicyModule.from_dict(
+            {
+                "name": "bad",
+                "rules": [{"id": "r", "decision": "deny", "tools": ["*"], "judge": True, "judge_ceiling": "allow"}],
+            }
+        )
 
 
 def test_remote_end_to_end_with_broker():
