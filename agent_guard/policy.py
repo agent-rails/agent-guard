@@ -156,7 +156,19 @@ class Policy:
 
 
 def _render_args(args: dict[str, Any]) -> str:
-    return json.dumps(args, sort_keys=True, default=str)
+    """Flatten args into one string for regex matching.
+
+    Deliberately NOT json.dumps: JSON escapes control characters (a real
+    newline becomes the two characters backslash+n), and since 'n' is a
+    word character, that escape sequence silently defeats any `\\b`
+    word-boundary pattern immediately after it — e.g. content ending a
+    line with "...load\neval(x)" would render as "...load\\neval(x)"
+    (literal backslash-n), merging "load" and "eval" into one unbroken
+    word run with no boundary for `\\beval\\b` to match. Preserving real
+    newlines/whitespace as-is keeps `\\b` correct at line starts, which is
+    the most common position for the content these policies scan for.
+    """
+    return "\n".join(f"{key}={value}" for key, value in sorted(args.items()))
 
 
 def _rule_from_dict(index: int, raw: dict[str, Any]) -> Rule:
