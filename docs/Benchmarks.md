@@ -27,14 +27,16 @@ pytest -q                  # runtime
 
 | Metric | Value |
 |---|---|
-| Test files | 18 |
-| Tests collected | 183 |
-| Result | 178 passed, 5 skipped |
-| Full-suite wall time | ~1.1s |
+| Test files | 19 |
+| Tests collected | 192 |
+| Result | 190 passed, 2 skipped |
+| Full-suite wall time | ~6.2s |
 
-**Corrected during review:** an earlier draft of this table reported "168 passed" from a manually `-k`-filtered run that excluded docker/gVisor/E2B-related tests wholesale. That was unnecessarily conservative — the suite already gates those tests properly with `pytest.mark.skipif` (only 5 genuinely need an unavailable environment: live Docker, gVisor, or an E2B account). A plain `pytest -q`, no manual filter, runs 10 more tests than the filtered command did and they pass — the filtered number understated what this suite actually verifies on a bare `pytest -q` invocation.
+**Corrected during review:** an earlier draft of this table reported "168 passed" from a manually `-k`-filtered run that excluded docker/gVisor/E2B-related tests wholesale. That was unnecessarily conservative — the suite already gates those tests properly with `pytest.mark.skipif` (only tests genuinely needing an unavailable environment skip: live Docker, gVisor, or an E2B account).
 
-Sub-second for the full non-gated suite — cheap enough to run before every commit without friction, which is why the development process this session used (run the suite after every change, not just before a PR) was viable at all.
+**Updated again, later the same development period:** the wall time jumped from ~1.1s to ~6.2s and skips dropped from 5 to 2 — not a regression, an environment change. Docker (and later a real container engine) became available partway through this project's development, so tests that used to skip now genuinely run: real container spawns, real gVisor attestation, real `guard`-check round-trips against live processes. The two still-skipped tests need `E2B_API_KEY` (a cloud account) and `runsc` specifically (gVisor's own binary, distinct from Docker itself) — neither is available on this machine. Slower now because more of the suite is doing real work, not because anything got less efficient.
+
+Still cheap enough to run before every commit without friction, which is why the development process this session used (run the suite after every change, not just before a PR) was viable throughout — including through the additional real-container examples added later (see `docs/Evaluation.md`'s "Real autonomous-agent examples" section).
 
 ## Rule coverage vs. the script it was migrated from
 
@@ -59,4 +61,4 @@ python -m build && ls -la dist/*.whl
 find agent_guard agentguard_identity -name "*.py" | xargs wc -l | tail -1
 ```
 
-**2,373 lines** across both packages combined (`agent_guard` + `agentguard_identity`), excluding tests. Small enough that the full-suite sub-second test run and the ~45 KB wheel aren't surprising — this stayed a focused library, not a framework, through every feature added this session (identity, PoP, write-content-scan, `guard check`).
+**2,423 lines** across both packages combined (`agent_guard` + `agentguard_identity`), excluding tests. Small enough that the ~45 KB wheel isn't surprising — this stayed a focused library, not a framework, through every feature added this session (identity, PoP, write-content-scan, `guard check`), including the fixes found by review after each one shipped.
