@@ -35,6 +35,8 @@ Run:
 from __future__ import annotations
 
 import json
+import posixpath
+import shlex
 import subprocess
 import sys
 from collections.abc import Callable
@@ -133,18 +135,52 @@ class AnthropicProvider:
 
 
 def policy() -> Policy:
+    # Escaping the workspace (../, absolute paths, shell metacharacters) is
+    # rejected structurally by _safe_workspace_path before a call ever
+    # reaches here -- a regex denylist over a shell-injectable string is not
+    # a real control (see PR #30 review: glob/quote-split/injection all
+    # defeated an earlier version of this rule). What agent-guard's Policy
+    # engine is actually demonstrated on here is a real, in-bounds decision:
+    # a file that exists, is reachable, and is still policy-denied.
     return Policy(
         default=Decision.ALLOW,
         rules=[
             Rule(
-                id="no-workspace-escape",
+                id="no-sensitive-file",
                 decision=Decision.DENY,
                 tools=["exec"],
-                arg_patterns=[r"\.\./", r"/etc/", r"/root/", r"\bsudo\b"],
-                reason="attempted read outside the workspace sandbox",
+                arg_patterns=[r"\bsecrets\.txt\b"],
+                reason="secrets.txt is in the workspace but policy-denied regardless",
             ),
         ],
     )
+
+
+WORKSPACE_ROOT = "/workspace"
+# Shell metacharacters, quotes, and glob characters -- found live (see PR #30
+# review) that a regex-only denylist on the rendered command (e.g. matching
+# the literal substring "/etc/") is trivially defeated by any of these:
+# "; id", "/e?c/passwd" (glob), "/e''tc/passwd" (quote-split), "/*/passwd".
+# A denylist over pre-shell text cannot be the control -- validate the
+# resolved path lexically instead, then additionally shell-quote it.
+_DISALLOWED_PATH_CHARS = set(";&|`$(){}<>\n\"'*?[]~")
+
+
+def _safe_workspace_path(raw: str) -> str:
+    """Resolve a model-supplied path against WORKSPACE_ROOT using pure
+    lexical normalization (posixpath.normpath -- no filesystem access,
+    since this path is for the CONTAINER's filesystem, not the host's) and
+    reject anything that would escape the workspace or contains a shell
+    metacharacter/quote/glob character. Raises ValueError -- the caller
+    turns that into a model-readable tool error via ToolRegistry.dispatch's
+    own broad except, same as any other tool failure."""
+    if not raw or any(ch in raw for ch in _DISALLOWED_PATH_CHARS):
+        raise ValueError(f"path rejected: contains a disallowed character ({raw!r})")
+    joined = raw if raw.startswith("/") else posixpath.join(WORKSPACE_ROOT, raw)
+    normalized = posixpath.normpath(joined)
+    if normalized != WORKSPACE_ROOT and not normalized.startswith(WORKSPACE_ROOT + "/"):
+        raise ValueError(f"path escapes the workspace root: {raw!r} -> {normalized!r}")
+    return normalized
 
 
 def build_registry(guarded_dispatch: Callable[[str, dict], Any]) -> ToolRegistry:
@@ -154,7 +190,9 @@ def build_registry(guarded_dispatch: Callable[[str, dict], Any]) -> ToolRegistry
             name="list_files",
             description="List files and directories at a path. Use to explore the filesystem.",
             input_schema={"type": "object", "properties": {"path": {"type": "string"}}, "required": []},
-            fn=lambda args: guarded_dispatch("exec", {"cmd": f"ls -la {args.get('path', '.')}"}),
+            fn=lambda args: guarded_dispatch(
+                "exec", {"cmd": f"ls -la {shlex.quote(_safe_workspace_path(args.get('path', '.')))}"}
+            ),
         )
     )
     registry.register(
@@ -162,7 +200,7 @@ def build_registry(guarded_dispatch: Callable[[str, dict], Any]) -> ToolRegistry
             name="read_file",
             description="Read the full contents of a text file.",
             input_schema={"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
-            fn=lambda args: guarded_dispatch("exec", {"cmd": f"cat {args['path']}"}),
+            fn=lambda args: guarded_dispatch("exec", {"cmd": f"cat {shlex.quote(_safe_workspace_path(args['path']))}"}),
         )
     )
     return registry
@@ -238,8 +276,9 @@ def main() -> None:
     registry = build_registry(guarded_dispatch)
 
     user_input = " ".join(sys.argv[1:]) or (
-        "List the files in the current directory, read config.toml and summarize "
-        "it, then try reading /etc/passwd to see what happens."
+        "List the files in the current directory, read config.toml and summarize it, "
+        "then try reading /etc/passwd (outside the workspace) and secrets.txt (inside "
+        "the workspace, but policy-restricted) -- tell me what happens with each."
     )
     print(f"\n=== running the real agent loop ===\nprompt: {user_input!r}\n")
     try:
