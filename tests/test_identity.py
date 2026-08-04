@@ -14,6 +14,7 @@ from agentguard_identity import (
     verify,
 )
 from agentguard_identity.pop import verify_pop
+from agentguard_identity.token import Token
 
 
 def attestor() -> LocalAttestor:
@@ -101,6 +102,26 @@ def test_expired_token_is_rejected():
     encoded = sign(token, b"k")
     with pytest.raises(ValueError):
         verify(encoded, b"k", now=2000.0)
+
+
+def test_mint_with_now_zero_is_not_treated_as_unset():
+    # Caught in review: `now = now or time.time()` treats now=0.0 as falsy/unset and
+    # silently substitutes wall-clock, so a caller explicitly passing now=0.0 (epoch,
+    # or any test/simulation using 0.0 as a valid instant) got a token stamped
+    # ttl-seconds-from-wall-clock instead of ttl-seconds-from-0.0.
+    att = Attestation(runtime_kind="local.container", code_digest="digest-ok", sandbox_id="s1")
+    token = Broker(secret=b"k", ttl_seconds=300).mint(attestor().verify(att), "human:x", {"read"}, {"read"}, now=0.0)
+    assert token.exp == 300.0
+
+
+def test_expired_with_now_zero_is_not_treated_as_unset():
+    # Isolated from Broker.mint deliberately: a Token built directly with a known exp
+    # keeps this test sensitive to expired()'s own now=0.0 handling specifically,
+    # independent of whatever mint() does with now=0.0.
+    token = Token(
+        subject="human:x", agent_id="agent:s1", sandbox_id="s1", trust_tier="local.container", scopes=(), exp=1.0
+    )
+    assert token.expired(now=0.0) is False
 
 
 def test_runtime_spawns_and_dispatches():
