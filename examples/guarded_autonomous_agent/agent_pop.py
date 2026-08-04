@@ -9,11 +9,21 @@ Proves two things live, against the real machinery -- not a fixture:
    possession of the sandbox's own private key, not just presenting the
    encoded string.
 2. A stolen encoded token ALONE is not enough. Simulates an attacker who
-   captured the encoded token (e.g. a leaked log line, a captured network
-   hop) but does not hold the sandbox's private key: Guard.from_token()
-   refuses to construct a Guard at all -- even though the token's own HMAC
-   signature is perfectly valid. Same refusal for a proof forged with the
-   wrong keypair.
+   captured just the encoded token -- e.g. a leaked log line, a config
+   file that shouldn't have had it -- but does not hold the sandbox's
+   private key: Guard.from_token() refuses to construct a Guard at all,
+   even though the token's own HMAC signature is perfectly valid. Same
+   refusal for a proof forged with the wrong keypair.
+
+Honest scope, corrected in review (PR #31): this covers token-without-proof
+theft, not a full on-the-wire capture. verify_pop's 60-second freshness
+window is deliberately generous rather than single-use (no nonce/replay
+tracking) -- a proof captured ALONGSIDE its token (a genuine network
+capture, where the attacker gets both) is replayable within that window.
+The property actually proven is "the bearer string alone is insufficient,"
+which is the whole point of holder-binding over a plain bearer token -- not
+"immune to a full request capture," which would need single-use proofs
+agent-guard doesn't implement.
 
 This repo's existing pop_example.py already proves this cryptographic
 property, but only against a scripted LocalRuntime call. This is the same
@@ -88,18 +98,26 @@ def demonstrate_theft_fails(encoded: str, secret: bytes) -> None:
     dummy_policy = Policy(default=Decision.ALLOW)
     dummy_sink = JsonlAuditSink(Path("/tmp/agent-guard-pop-demo-should-never-be-written.jsonl"))
 
+    # Assert on the message, not just "some ValueError happened" -- verify_token
+    # also raises ValueError on a wrong secret or an expired token (token.py),
+    # caught by the same handler. Without checking the reason, a refusal for an
+    # unrelated cause would print a misleadingly reassuring "correctly refused"
+    # line. Found in review (PR #31): a proof credible enough to assert on, not
+    # just eyeball.
     try:
         Guard.from_token(encoded, secret, dummy_policy, audit=dummy_sink, pop_proof=None)
-        print("UNEXPECTED: Guard was constructed with no proof at all")
+        raise AssertionError("UNEXPECTED: Guard was constructed with no proof at all")
     except ValueError as err:
+        assert "pop_proof" in str(err), f"refused, but not for the expected reason: {err}"
         print(f"correctly refused (no proof presented): {err}")
 
     attacker_keypair = PoPKeypair.generate()
     forged_proof = attacker_keypair.prove(encoded)
     try:
         Guard.from_token(encoded, secret, dummy_policy, audit=dummy_sink, pop_proof=forged_proof)
-        print("UNEXPECTED: Guard was constructed with a forged proof")
+        raise AssertionError("UNEXPECTED: Guard was constructed with a forged proof")
     except ValueError as err:
+        assert "pop_proof" in str(err), f"refused, but not for the expected reason: {err}"
         print(f"correctly refused (proof from the wrong key): {err}")
 
 
