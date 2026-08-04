@@ -155,8 +155,58 @@ class Policy:
         return cls(default=Decision(data["default"]), rules=rules)
 
 
+def _flatten_value(value: Any) -> list[str]:
+    """Reduce an arg value to its string leaves, recursively.
+
+    A bare str(value) on a list/dict re-introduces the exact bug
+    _render_args exists to avoid: str(["a\\nb"]) is the Python repr
+    "['a\\\\nb']", which re-escapes the newline into the two characters
+    backslash+n and defeats \\b at that boundary all over again. Recursing
+    to actual string leaves and joining them with a plain space (itself a
+    \\b boundary) keeps the guarantee real newlines make possible.
+
+    Known residual gap: a bytes leaf still falls through to str() below,
+    which repr()-escapes any embedded newline back into literal backslash+n
+    -- bytes values aren't reachable via guard's JSON-based interfaces
+    (check/mcp/run), so this is a narrow, undocumented-elsewhere limit for
+    direct Python API callers only, not fixed here.
+    """
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        parts: list[str] = []
+        for key, inner in sorted(value.items(), key=lambda kv: str(kv[0])):
+            parts.append(str(key))
+            parts.extend(_flatten_value(inner))
+        return parts
+    if isinstance(value, (list, tuple)):
+        parts = []
+        for item in value:
+            parts.extend(_flatten_value(item))
+        return parts
+    return [str(value)]
+
+
 def _render_args(args: dict[str, Any]) -> str:
-    return json.dumps(args, sort_keys=True, default=str)
+    """Flatten args into one string for regex matching.
+
+    Deliberately NOT json.dumps: JSON escapes control characters (a real
+    newline becomes the two characters backslash+n), and since 'n' is a
+    word character, that escape sequence silently defeats any `\\b`
+    word-boundary pattern immediately after it — e.g. content ending a
+    line with "...load\neval(x)" would render as "...load\\neval(x)"
+    (literal backslash-n), merging "load" and "eval" into one unbroken
+    word run with no boundary for `\\beval\\b` to match. Preserving real
+    newlines/whitespace as-is keeps `\\b` correct at line starts, which is
+    the most common position for the content these policies scan for.
+    Nested list/dict/tuple values are recursed to their string leaves
+    first (see _flatten_value) so the same guarantee holds for structured
+    args, not just top-level strings.
+    """
+    lines = []
+    for key, value in sorted(args.items()):
+        lines.append(f"{key}=" + " ".join(_flatten_value(value)))
+    return "\n".join(lines)
 
 
 def _rule_from_dict(index: int, raw: dict[str, Any]) -> Rule:

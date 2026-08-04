@@ -21,8 +21,12 @@ default: allow
 # checks. NOT migrated, deliberately:
 #   - YAML-frontmatter-aware checks (e.g. "hooks: directive inside
 #     frontmatter") — don't translate to a flat regex-over-content model.
-#   - Line-start harness-execution syntax ("^! ") — same reason, no line
-#     anchor survives JSON-flattening into one rendered string.
+#   - Line-start harness-execution syntax ("^! ") — a YAML-frontmatter-aware,
+#     per-line scan still doesn't reduce to a single first-match-wins deny
+#     rule the way scan-skill.sh's line-by-line loop does, so this stays in
+#     the script rather than the policy. (_render_args now preserves real
+#     newlines, so a MULTILINE-anchored pattern is technically possible here
+#     going forward — just not what motivated leaving this one out.)
 #   - Bare network calls (curl/wget/fetch NOT piped to a shell) — was a LOW
 #     scan-skill.sh finding; omitted here rather than added as noise.
 # The credential/sensitive-path rule below is a literal word match, not a
@@ -33,7 +37,11 @@ rules:
   - id: pipe-to-shell
     decision: deny
     tools: ["write"]
-    arg_patterns: ["(curl|wget)\\s+.*\\|\\s*(sh|bash)"]
+    # [\s\S]*? (not .*): rendered args now preserve real newlines (see
+    # _render_args), and a bare `.` never crosses them without DOTALL --
+    # a shell line-continuation ("curl ... \<newline>| sh") is valid,
+    # executable shell and must not evade this rule.
+    arg_patterns: ["(curl|wget)\\s+[\\s\\S]*?\\|\\s*(sh|bash)"]
     reason: remote code execution — piping a fetch straight into a shell
 
   - id: eval-call
