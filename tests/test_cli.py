@@ -269,6 +269,28 @@ def test_check_writes_to_audit_sink(monkeypatch, tmp_path):
     assert record["executed"] is False  # check never executes -- see docstring
 
 
+def test_explain_unknown_trust_tier_fails_closed_not_a_traceback(tmp_path, capsys):
+    # Caught in review: an unknown --trust-tier reached Policy.explain -> tiers.meets
+    # -> tiers.rank, which raised an unhandled ValueError -- printing a full traceback
+    # with absolute filesystem paths to stderr instead of the clean exit-1 error
+    # docs/THREAT_MODEL.md Pillar 5 claims this class of input already fails as.
+    target = tmp_path / "policy.yaml"
+    assert main(["init", str(target)]) == 0
+    code = main(["explain", "--policy", str(target), "--trust-tier", "not-a-real-tier", "--", "deploy", "prod"])
+    assert code == 1
+    assert "unknown --trust-tier" in capsys.readouterr().err
+
+
+def test_check_unknown_trust_tier_fails_closed_not_a_traceback(monkeypatch, capsys):
+    code = _check_with_stdin(
+        monkeypatch,
+        ["--trust-tier", "not-a-real-tier", "--policy", "policy.example.yaml"],
+        '{"tool": "prod_write", "args": {}}',
+    )
+    assert code == 1
+    assert "unknown --trust-tier" in capsys.readouterr().err
+
+
 def test_init_refuses_overwrite_without_force(tmp_path, capsys):
     target = tmp_path / "policy.yaml"
     assert main(["init", str(target)]) == 0
