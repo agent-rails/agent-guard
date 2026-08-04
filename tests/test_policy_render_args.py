@@ -79,3 +79,22 @@ def test_policy_denies_content_after_a_newline_inside_a_nested_list_value():
     verdict = policy.evaluate("write", {"content": ["import os\neval(payload)"]})
     assert verdict.decision is Decision.DENY
     assert verdict.rule_id == "eval-call"
+
+
+def test_render_args_flattens_a_dict_value_across_a_newline():
+    rendered = _render_args({"content": {"snippet": "import os\neval(payload)"}})
+    assert re.search(r"\beval\s*\(", rendered) is not None
+
+
+def test_render_args_flattens_a_tuple_value_across_a_newline():
+    rendered = _render_args({"content": ("import os\neval(payload)",)})
+    assert re.search(r"\beval\s*\(", rendered) is not None
+
+
+def test_render_args_sorts_a_dict_value_with_mixed_key_types():
+    # Regression: sorted(dict.items()) raises TypeError on mixed/uncomparable
+    # keys (e.g. int and str together) -- a real crash where the old
+    # str(value) render just stringified the whole dict without sorting.
+    # Sorting by str(key) keeps determinism without requiring comparable keys.
+    rendered = _render_args({"content": {1: "eval(payload)", "b": "other"}})
+    assert re.search(r"\beval\s*\(", rendered) is not None

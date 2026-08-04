@@ -164,12 +164,18 @@ def _flatten_value(value: Any) -> list[str]:
     backslash+n and defeats \\b at that boundary all over again. Recursing
     to actual string leaves and joining them with a plain space (itself a
     \\b boundary) keeps the guarantee real newlines make possible.
+
+    Known residual gap: a bytes leaf still falls through to str() below,
+    which repr()-escapes any embedded newline back into literal backslash+n
+    -- bytes values aren't reachable via guard's JSON-based interfaces
+    (check/mcp/run), so this is a narrow, undocumented-elsewhere limit for
+    direct Python API callers only, not fixed here.
     """
     if isinstance(value, str):
         return [value]
     if isinstance(value, dict):
         parts: list[str] = []
-        for key, inner in sorted(value.items()):
+        for key, inner in sorted(value.items(), key=lambda kv: str(kv[0])):
             parts.append(str(key))
             parts.extend(_flatten_value(inner))
         return parts
