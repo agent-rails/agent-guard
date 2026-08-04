@@ -287,6 +287,8 @@ pip install "agentguard[pop]"
 python examples/pop_example.py
 ```
 
+Same property, proven against a real autonomous agent in a real container instead of a scripted call: [`examples/guarded_autonomous_agent/agent_pop.py`](examples/guarded_autonomous_agent/agent_pop.py).
+
 ## Isolation tiers & egress
 
 Isolation is a pluggable runtime backend selected by trust tier. The guard gates *on* the tier; the runtime *makes the tier real*. A tier is only attested when it is actually provided — no silent downgrade.
