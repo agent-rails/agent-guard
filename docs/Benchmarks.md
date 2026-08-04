@@ -28,8 +28,8 @@ pytest -q                  # runtime
 | Metric | Value |
 |---|---|
 | Test files | 19 |
-| Tests collected | 192 |
-| Result | 190 passed, 2 skipped |
+| Tests collected | 198 |
+| Result | 196 passed, 2 skipped |
 | Full-suite wall time | ~6.2s |
 
 **Corrected during review:** an earlier draft of this table reported "168 passed" from a manually `-k`-filtered run that excluded docker/gVisor/E2B-related tests wholesale. That was unnecessarily conservative — the suite already gates those tests properly with `pytest.mark.skipif` (only tests genuinely needing an unavailable environment skip: live Docker, gVisor, or an E2B account).
@@ -61,4 +61,4 @@ python -m build && ls -la dist/*.whl
 find agent_guard agentguard_identity -name "*.py" | xargs wc -l | tail -1
 ```
 
-**2,423 lines** across both packages combined (`agent_guard` + `agentguard_identity`), excluding tests. Small enough that the ~45 KB wheel isn't surprising — this stayed a focused library, not a framework, through every feature added this session (identity, PoP, write-content-scan, `guard check`), including the fixes found by review after each one shipped.
+**2,466 lines** across both packages combined (`agent_guard` + `agentguard_identity`), excluding tests. Small enough that the ~45 KB wheel isn't surprising — this stayed a focused library, not a framework, through every feature added this session (identity, PoP, write-content-scan, `guard check`), including the fixes found by review after each one shipped.
