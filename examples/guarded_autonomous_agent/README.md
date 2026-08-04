@@ -75,6 +75,33 @@ python examples/guarded_autonomous_agent/agent.py
 python examples/guarded_autonomous_agent/agent.py "list the files here and read notes.md"
 ```
 
+## Holder-bound identity (Proof-of-Possession)
+
+`agent_pop.py` runs the exact same real agent, real container, and real
+policy as `agent.py` above, but the identity token is holder-bound instead
+of a plain bearer credential. This repo's `pop_example.py` already proves
+the underlying cryptographic property (a stolen encoded token alone is not
+usable without the matching private key) -- but only against a scripted
+`LocalRuntime` call. This is the same property, proven against a real
+autonomous agent in a real container.
+
+```bash
+pip install "agentguard[pop]"
+python examples/guarded_autonomous_agent/agent_pop.py
+```
+
+It runs, in order:
+
+1. **Theft simulation** -- constructs a `Guard` from the encoded token alone
+   (no proof), then again with a proof forged by a *different* keypair.
+   Both refused by `Guard.from_token()`, even though the token's own HMAC
+   signature is valid in both cases -- direct against the real API, no LLM
+   involved, since this is a property of the crypto layer, not agent
+   behavior.
+2. **The legitimate path** -- the sandbox that actually holds the private
+   key proves possession, `Guard.from_token()` succeeds, and the same real
+   agent from `agent.py` runs normally behind it.
+
 ## Attribution
 
 The tool/provider seam (`Tool`, `ToolRegistry`, `AnthropicProvider`) is
