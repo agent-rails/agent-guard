@@ -140,18 +140,21 @@ class Guard:
 
     def _consult_judge(self, verdict: Verdict, tool: str, args: dict[str, Any]) -> Verdict:
         fallback = verdict.decision
+        # A rule's own `decision` is the hard boundary static policy already set; the
+        # authored judge_ceiling can only narrow that further, never widen past it --
+        # otherwise a rule authored as decision=deny + judge_ceiling=allow would let a
+        # judge escalate a static DENY all the way to ALLOW, which DESIGN.md's stated
+        # invariant ("advisory within hard bounds set by static policy, never the
+        # boundary itself") explicitly rules out.
+        ceiling = clamp(verdict.judge_ceiling, verdict.decision)
         if self._judge is None:
             return replace(verdict, reason=f"judge required, none configured; fail-closed to {fallback.value}")
         try:
-            decision, why = self._judge.evaluate(
-                JudgeRequest(self._agent_id, tool, args, verdict.reason, verdict.judge_ceiling)
-            )
+            decision, why = self._judge.evaluate(JudgeRequest(self._agent_id, tool, args, verdict.reason, ceiling))
         except Exception as err:  # noqa: BLE001 - judge is an untrusted edge; fail closed to the rule fallback
             return replace(verdict, reason=f"judge error ({err}); fail-closed to {fallback.value}")
-        final = clamp(decision, verdict.judge_ceiling)
-        return replace(
-            verdict, decision=final, reason=f"judge->{final.value} (ceiling {verdict.judge_ceiling.value}): {why}"
-        )
+        final = clamp(decision, ceiling)
+        return replace(verdict, decision=final, reason=f"judge->{final.value} (ceiling {ceiling.value}): {why}")
 
 
 def guarded(guard: Guard, tool_name: str | None = None) -> Callable:

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .decision import Decision, Verdict
+from .decision import PERMISSIVENESS, Decision, Verdict
 from .tiers import TRUST_TIERS, meets
 
 
@@ -213,16 +213,25 @@ def _rule_from_dict(index: int, raw: dict[str, Any]) -> Rule:
     tools = raw.get("tools")
     if not tools:
         raise ValueError(f"rule #{index} is missing a non-empty 'tools' list")
+    decision = Decision(raw["decision"])
     ceiling = raw.get("judge_ceiling")
+    judge_ceiling = Decision(ceiling) if ceiling else Decision.REQUIRE_HUMAN
+    if raw.get("judge", False) and PERMISSIVENESS[judge_ceiling] > PERMISSIVENESS[decision]:
+        raise ValueError(
+            f"rule #{index} ({raw.get('id', f'rule-{index}')}): judge_ceiling "
+            f"'{judge_ceiling.value}' is more permissive than the rule's own decision "
+            f"'{decision.value}' — a judge can only tighten a verdict, never widen it past "
+            "what static policy already decided; set judge_ceiling no more permissive than decision"
+        )
     return Rule(
         id=raw.get("id", f"rule-{index}"),
-        decision=Decision(raw["decision"]),
+        decision=decision,
         tools=tuple(tools),
         arg_patterns=tuple(raw.get("arg_patterns", ())),
         reason=raw.get("reason", ""),
         min_trust_tier=raw.get("min_trust_tier"),
         judge=bool(raw.get("judge", False)),
-        judge_ceiling=Decision(ceiling) if ceiling else Decision.REQUIRE_HUMAN,
+        judge_ceiling=judge_ceiling,
     )
 
 
