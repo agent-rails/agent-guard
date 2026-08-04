@@ -113,6 +113,13 @@ def test_remote_sandbox_attests_as_gvisor_not_microvm():
     assert att.runtime_kind == "remote.gvisor"
 
 
+def test_remote_sandbox_attest_after_close_raises():
+    sandbox = RemoteSandbox(FakeRemoteClient())
+    sandbox.close()
+    with pytest.raises(RuntimeError):
+        sandbox.attest()
+
+
 def test_provider_attestor_gates_on_template():
     att = RemoteSandbox(FakeRemoteClient()).attest()
     ok = ProviderAttestor({"trusted-template"}).verify(att)

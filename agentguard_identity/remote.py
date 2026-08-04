@@ -29,6 +29,8 @@ class RemoteSandbox(PoPCapableSandbox):
         self._init_pop(pop_enabled)
 
     def attest(self) -> Attestation:
+        if self._closed:
+            raise RuntimeError("cannot attest a closed sandbox")
         return Attestation(
             runtime_kind="remote.gvisor",
             code_digest=self._client.template,
@@ -91,7 +93,14 @@ def _default_e2b_factory(template: str) -> RemoteClient:
             self._sbx = Sandbox(template=template)
 
         def run(self, cmd: str) -> str:
-            return self._sbx.commands.run(cmd).stdout
+            result = self._sbx.commands.run(cmd)
+            if result.exit_code != 0:
+                # Discarding stderr/exit_code here made a failed remote command
+                # indistinguishable from a successful one that happened to print
+                # nothing to stdout -- raise instead of returning a misleadingly
+                # empty/partial success.
+                raise RuntimeError(f"remote command failed (exit {result.exit_code}): {result.stderr}")
+            return result.stdout
 
         def kill(self) -> None:
             self._sbx.kill()
