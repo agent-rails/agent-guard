@@ -119,9 +119,9 @@ Shows a benign query allowed, a `DROP TABLE` blocked, a `git push --force` gated
 - Guard — wraps a `dispatch(tool, args)`; evaluates, gates, executes, audits.
 - Audit — one structured record per decision. Sinks: `JsonlAuditSink` (local file), `WebhookAuditSink` (ship to a SIEM / collector — fail-loud, never drops), `CallableAuditSink` (any `emit` callable — OpenTelemetry / statsd / custom), `MultiAuditSink` (fan-out: durable local + remote), `SigningAuditSink` (wraps another sink, HMAC-signs each record so tampering by a party *without* the signing secret is detectable — does not defend against a compromised producer, which already holds the secret it signs with, nor does it detect a producer that simply never emits a record), `MemoryAuditSink` (tests), or your own `AuditSink`.
 
-## Scaling policy — federated, layered, cached (goose-style)
+## Scaling policy — federated, layered, cached
 
-One flat file doesn't scale to many tools, teams, and MCP servers. Compose instead: each source ships a `PolicyModule` that owns a tool namespace and a layer. A `PolicyRegistry` aggregates them, compiles a layer-ordered index (cached, recompiled on change), and evaluates by namespace — the same shape goose uses for tools (per-source, namespaced, cached).
+One flat file doesn't scale to many tools, teams, and MCP servers. Compose instead: each source ships a `PolicyModule` that owns a tool namespace and a layer. A `PolicyRegistry` aggregates them, compiles a layer-ordered index (cached, recompiled on change), and evaluates by namespace.
 
 ```python
 from agent_guard import PolicyRegistry, PolicyModule, Decision, Guard, JsonlAuditSink
