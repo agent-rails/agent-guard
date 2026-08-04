@@ -266,6 +266,8 @@ Note the composition: the token is signed (`sign(token, secret)`) and the guard 
 
 The block boundary is deliberate: `agentguard_identity` does not import `agent_guard` and vice versa; the examples wire them. Identity says *who/where*, the guard says *what*, the audit sink says *did*. See `docs/DESIGN-runtime-identity-binding.md` for the local-and-remote design and the honest trust gradient.
 
+`end_to_end.py` proves the mechanism with scripted, hardcoded tool calls. For the same mechanism against a real, autonomous Claude agent deciding its own tool calls — genuinely running inside a real Docker container agent-guard spawned and attested, not a claim about isolation — see [`examples/guarded_autonomous_agent/`](examples/guarded_autonomous_agent/).
+
 ### Holder-bound tokens (proof-of-possession)
 
 By default a minted token is a bearer credential: whoever holds the encoded string can use it, for its full TTL, however it was obtained (a leaked log line, a captured network hop). Opt a sandbox into holder-binding and that stops being true:

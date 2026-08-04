@@ -1,0 +1,8 @@
+[service]
+name = "example-workload"
+version = "0.3.1"
+port = 8080
+
+[limits]
+max_connections = 100
+timeout_seconds = 30
