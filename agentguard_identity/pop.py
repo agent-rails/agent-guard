@@ -120,10 +120,16 @@ def verify_pop(
         expected_binding = _b64u(hashlib.sha256(encoded_token.encode("utf-8")).digest())
         if not hmac.compare_digest(proof.token_binding, expected_binding):
             return False
+        # isinstance guard, not a bare math.isfinite() call: iat arrives from an
+        # attacker-controlled proof and can be any JSON type (str, None, list, ...)
+        # once deserialized -- math.isfinite() would raise TypeError on those,
+        # breaking this function's own "never raises" contract for a whole input class.
+        if isinstance(proof.iat, bool) or not isinstance(proof.iat, (int, float)) or not math.isfinite(proof.iat):
+            return False
     except (binascii.Error, ValueError, TypeError):
         return False
     now = now if now is not None else time.time()
-    if not math.isfinite(proof.iat) or abs(now - proof.iat) > max_age_seconds:
+    if abs(now - proof.iat) > max_age_seconds:
         return False
     _, ed25519_public, invalid_signature = _cryptography_ed25519()
     try:
