@@ -3,7 +3,7 @@ name = "agentguard"
 version = "0.1.0"
 description = "Least-privilege authorization, per-agent identity, and audit for AI agent tool calls. Harness-agnostic, local-first, fail-closed."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 authors = [{ name = "voltagebots" }]
 keywords = ["ai", "agents", "mcp", "authorization", "guardrails", "security", "audit", "llm"]
@@ -15,7 +15,7 @@ classifiers = [
     "Topic :: Security",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-dependencies = []
+dependencies = ["google-re2>=1.1"]
 
 [project.urls]
 Homepage = "https://github.com/voltagebots/agent-guard"

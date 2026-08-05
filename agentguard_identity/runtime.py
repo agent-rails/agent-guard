@@ -3,8 +3,9 @@ from __future__ import annotations
 import shutil
 import subprocess
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 from .attestation import Attestation
 from .egress import EgressPolicy

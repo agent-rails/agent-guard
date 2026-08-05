@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import fnmatch
 import json
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import re2
+
 from .decision import PERMISSIVENESS, Decision, Verdict
 from .tiers import TRUST_TIERS, meets
+
+_RE2_OPTIONS = re2.Options()
+_RE2_OPTIONS.log_errors = False  # RE2 logs invalid patterns to stderr via abseil by
+# default even when the caller catches the exception; we raise our own clear
+# ValueError below, so the raw C++ log line would just be noise on top of it.
 
 
 @dataclass(frozen=True)
@@ -29,6 +35,38 @@ class Rule:
     min_trust_tier: str | None = None
     judge: bool = False
     judge_ceiling: Decision = Decision.REQUIRE_HUMAN
+    _compiled_arg_patterns: tuple[Any, ...] = field(default=(), init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        """Precompile arg_patterns once per rule via RE2, not stdlib re.
+
+        arg_patterns is policy-author-written but matched against
+        attacker/agent-controlled content -- a backtracking engine lets a
+        plausible, non-exotic pattern (e.g. `(\\w+)+\\d`) be forced into
+        catastrophic backtracking by a few dozen bytes of crafted content:
+        reproduced live, that pattern hung stdlib `re` for 5+ seconds on a
+        31-byte payload, with zero protection. RE2 guarantees linear-time
+        matching by construction, making that vulnerability class
+        structurally impossible rather than merely rare -- and precompiling
+        here (once per rule, not once per Policy.evaluate() call) is also
+        the fix for rule-count/content-length scaling, not just safety.
+
+        RE2's syntax is a strict subset of Perl/PCRE (no backreferences, no
+        lookaround) -- a pattern using either fails to compile here, at
+        policy-load time, with a clear error, rather than at first-match time.
+        """
+        compiled = []
+        for pattern in self.arg_patterns:
+            try:
+                compiled.append(re2.compile(pattern, options=_RE2_OPTIONS))
+            except re2.error as err:
+                message = err.args[0].decode() if err.args and isinstance(err.args[0], bytes) else str(err)
+                raise ValueError(
+                    f"rule '{self.id}': arg_pattern {pattern!r} is not valid RE2 syntax ({message}). "
+                    "RE2 does not support backreferences or lookaround "
+                    "(see https://github.com/google/re2/wiki/Syntax) — rewrite the pattern without them."
+                ) from err
+        object.__setattr__(self, "_compiled_arg_patterns", tuple(compiled))
 
     def match_detail(self, tool: str, rendered_args: str) -> MatchDetail:
         """Single source of matching truth: used by both evaluate and explain.
@@ -42,7 +80,11 @@ class Rule:
             return MatchDetail(matched=False, why_skipped="tool pattern miss")
         if not self.arg_patterns:
             return MatchDetail(matched=True)
-        hits = [pattern for pattern in self.arg_patterns if re.search(pattern, rendered_args)]
+        hits = [
+            pattern
+            for pattern, compiled in zip(self.arg_patterns, self._compiled_arg_patterns, strict=True)
+            if compiled.search(rendered_args)
+        ]
         if not hits:
             return MatchDetail(matched=False, why_skipped="arg pattern miss", skipped_on_args=True)
         return MatchDetail(matched=True, matched_patterns=hits)
