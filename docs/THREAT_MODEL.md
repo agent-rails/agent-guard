@@ -40,7 +40,7 @@ What agent-guard defends against, per pillar, framed as Prevent / Contain / Dete
 ## Pillar 2 — Authorization (`agent_guard.Policy`/`Guard`)
 
 **Prevent:**
-- Destructive tool calls (`rm -rf`, `DROP TABLE`, force-push, etc.) via deterministic, first-match-wins regex policy. A policy with no explicit `default` is rejected at load — no silent fallback.
+- Destructive tool calls (`rm -rf`, `DROP TABLE`, force-push, etc.) via deterministic, first-match-wins regex policy. A policy with no explicit `default` is rejected at load — no silent fallback. Matching runs on RE2 (linear-time by construction), not stdlib `re` — a policy-author-written pattern matched against attacker-controlled content cannot be forced into catastrophic backtracking, a real live-reproduced DoS this project used to be exposed to (see below).
 - Malicious content landing on disk via `Edit`/`Write` — the same policy engine evaluates a synthetic `{"tool": "write", "args": {"content": ...}}` call, denying pipe-to-shell, `eval`/`exec`, credential/sensitive-path word references, and symlink creation.
 
 **Contain:** default is `allow`, not paranoid default-deny — a false positive degrades to a logged, visible finding rather than blocking real work outright, for anything not on the explicit deny list.
@@ -51,6 +51,7 @@ What agent-guard defends against, per pillar, framed as Prevent / Contain / Dete
 - A `base64`-shaped regex denied legitimate lockfile integrity hashes (`sha512-...` in `yarn.lock`) — downgraded from deny to allow-but-logged; the original HIGH severity was calibrated for skill-file instructions specifically, a narrower and riskier context than general writes.
 - Evaluating with `{"path": ..., "content": ...}` together denied any file merely *named* `secrets.yaml` regardless of content, because the policy engine renders the whole args dict into one matched string. Fixed as a calling-convention rule (content-only), with a test that reproduces the old pitfall on purpose so it stays visible.
 - The credential/sensitive-path rule is a **literal word match, not a credential-shape detector** — `password=`, `api_key=`, `PRIVATE_KEY=` assignments are not caught. This is a known, tested, and documented limitation (a test asserts the gap explicitly), not a silent one.
+- A plausible, non-exotic policy-author pattern (`(\w+)+\d`) hung the process for 5+ seconds on a 31-byte adversarial payload via catastrophic backtracking, reproduced live -- the matching engine itself was the exposed surface, not any one shipped pattern. Fixed by migrating `arg_patterns` matching from stdlib `re` to RE2, which structurally cannot backtrack catastrophically; not a heuristic detector layered on top of the old engine.
 
 **Explicit non-goals:**
 - No LLM judges a security-critical decision on its own output — an `LLMJudge` may only *tighten* a verdict toward `require_human` within a rule's ceiling, never grant beyond what static policy already permits.
