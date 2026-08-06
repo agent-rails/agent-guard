@@ -19,12 +19,12 @@ Agents run with their operator's full permissions and no record of what they did
 ## Install
 
 ```bash
-pip install agentguard                # core (pulls in google-re2)
-pip install "agentguard[yaml]"        # + YAML policy files
-pip install "agentguard[pop]"         # + proof-of-possession (Ed25519 via cryptography)
+pip install toolcall-authz                # core (pulls in google-re2)
+pip install "toolcall-authz[yaml]"        # + YAML policy files
+pip install "toolcall-authz[pop]"         # + proof-of-possession (Ed25519 via cryptography)
 ```
 
-> Distribution name is `agentguard` on PyPI (the `agent-guard` name was taken). Import paths are `agent_guard` and `agentguard_identity`; the CLI is `guard`.
+> Distribution name is `toolcall-authz` on PyPI -- `agentguard` and close variants were blocked by PyPI's name-similarity check against unrelated existing packages, not chosen for any other reason. Import paths are `agent_guard` and `agentguard_identity`; the CLI is `guard`.
 
 From source (dev):
 
@@ -278,10 +278,10 @@ proof = sandbox.prove_possession(encoded)  # fresh, single-token-scoped, signed 
 guard = Guard.from_token(encoded, secret, policy, audit=sink, pop_proof=proof)
 ```
 
-A captured `encoded` string with no proof, or a proof from a different sandbox's key, is rejected even though the token's own signature checks out. Requires the `[pop]` extra (`pip install "agentguard[pop]"` — Ed25519 via `cryptography`); the core package doesn't need this extra either way, and omitting `pop_thumbprint`/`pop_proof` entirely is unchanged bearer-token behavior. Adapted from DPoP (RFC 9449) / the proof-of-possession pattern behind cloud agent-identity models, not adopted wholesale — DPoP proper binds a proof to an HTTP method+URI, which doesn't exist in agent-guard's actual seam (`dispatch(tool, args)`, a function call). Runnable demo, including the rejected-forgery case:
+A captured `encoded` string with no proof, or a proof from a different sandbox's key, is rejected even though the token's own signature checks out. Requires the `[pop]` extra (`pip install "toolcall-authz[pop]"` — Ed25519 via `cryptography`); the core package doesn't need this extra either way, and omitting `pop_thumbprint`/`pop_proof` entirely is unchanged bearer-token behavior. Adapted from DPoP (RFC 9449) / the proof-of-possession pattern behind cloud agent-identity models, not adopted wholesale — DPoP proper binds a proof to an HTTP method+URI, which doesn't exist in agent-guard's actual seam (`dispatch(tool, args)`, a function call). Runnable demo, including the rejected-forgery case:
 
 ```bash
-pip install "agentguard[pop]"
+pip install "toolcall-authz[pop]"
 python examples/pop_example.py
 ```
 
