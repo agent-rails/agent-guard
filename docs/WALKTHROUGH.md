@@ -79,11 +79,11 @@ Use it in-process with `guard.wrap()`, or as an MCP proxy that gates every `tool
 
 ## How to run it
 
-Install (not yet on PyPI — from GitHub):
+Install:
 
 ```bash
-pip install git+https://github.com/voltagebots/agent-guard.git                     # core, zero runtime deps
-pip install "agentguard[yaml] @ git+https://github.com/voltagebots/agent-guard.git" # + YAML policy files
+pip install agentguard                # core (pulls in google-re2)
+pip install "agentguard[yaml]"        # + YAML policy files
 ```
 
 Python, in 30 seconds:

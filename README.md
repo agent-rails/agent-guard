@@ -18,15 +18,13 @@ Agents run with their operator's full permissions and no record of what they did
 
 ## Install
 
-Not yet published to PyPI — install from GitHub:
-
 ```bash
-pip install git+https://github.com/voltagebots/agent-guard.git                        # core (pulls in google-re2)
-pip install "agentguard[yaml] @ git+https://github.com/voltagebots/agent-guard.git"    # + YAML policy files
-pip install "agentguard[pop] @ git+https://github.com/voltagebots/agent-guard.git"     # + proof-of-possession (Ed25519 via cryptography)
+pip install agentguard                # core (pulls in google-re2)
+pip install "agentguard[yaml]"        # + YAML policy files
+pip install "agentguard[pop]"         # + proof-of-possession (Ed25519 via cryptography)
 ```
 
-> Distribution name will be `agentguard` on PyPI once published (the `agent-guard` name was taken). Import paths are `agent_guard` and `agentguard_identity`; the CLI is `guard`.
+> Distribution name is `agentguard` on PyPI (the `agent-guard` name was taken). Import paths are `agent_guard` and `agentguard_identity`; the CLI is `guard`.
 
 From source (dev):
 
