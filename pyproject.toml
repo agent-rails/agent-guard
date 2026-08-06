@@ -1,6 +1,6 @@
 [project]
 name = "agentguard"
-version = "0.1.0"
+version = "0.2.0"
 description = "Least-privilege authorization, per-agent identity, and audit for AI agent tool calls. Harness-agnostic, local-first, fail-closed."
 readme = "README.md"
 requires-python = ">=3.10"
