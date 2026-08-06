@@ -2,7 +2,7 @@
 
 [![ci](https://github.com/voltagebots/agent-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/voltagebots/agent-guard/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![python](https://img.shields.io/badge/python-3.9%2B-3776ab.svg)](pyproject.toml)
+[![python](https://img.shields.io/badge/python-3.10%2B-3776ab.svg)](pyproject.toml)
 
 Least-privilege authorization + audit for AI agent tool calls. One small library that wraps the seam every agent has — the tool-dispatch boundary — and decides `allow` / `deny` / `require_human` per call, then logs every decision.
 
@@ -21,7 +21,7 @@ Agents run with their operator's full permissions and no record of what they did
 Not yet published to PyPI — install from GitHub:
 
 ```bash
-pip install git+https://github.com/voltagebots/agent-guard.git                        # core, zero runtime dependencies
+pip install git+https://github.com/voltagebots/agent-guard.git                        # core (pulls in google-re2)
 pip install "agentguard[yaml] @ git+https://github.com/voltagebots/agent-guard.git"    # + YAML policy files
 pip install "agentguard[pop] @ git+https://github.com/voltagebots/agent-guard.git"     # + proof-of-possession (Ed25519 via cryptography)
 ```
@@ -280,7 +280,7 @@ proof = sandbox.prove_possession(encoded)  # fresh, single-token-scoped, signed 
 guard = Guard.from_token(encoded, secret, policy, audit=sink, pop_proof=proof)
 ```
 
-A captured `encoded` string with no proof, or a proof from a different sandbox's key, is rejected even though the token's own signature checks out. Requires the `[pop]` extra (`pip install "agentguard[pop]"` — Ed25519 via `cryptography`); the core package stays zero-dependency, and omitting `pop_thumbprint`/`pop_proof` entirely is unchanged bearer-token behavior. Adapted from DPoP (RFC 9449) / the proof-of-possession pattern behind cloud agent-identity models, not adopted wholesale — DPoP proper binds a proof to an HTTP method+URI, which doesn't exist in agent-guard's actual seam (`dispatch(tool, args)`, a function call). Runnable demo, including the rejected-forgery case:
+A captured `encoded` string with no proof, or a proof from a different sandbox's key, is rejected even though the token's own signature checks out. Requires the `[pop]` extra (`pip install "agentguard[pop]"` — Ed25519 via `cryptography`); the core package doesn't need this extra either way, and omitting `pop_thumbprint`/`pop_proof` entirely is unchanged bearer-token behavior. Adapted from DPoP (RFC 9449) / the proof-of-possession pattern behind cloud agent-identity models, not adopted wholesale — DPoP proper binds a proof to an HTTP method+URI, which doesn't exist in agent-guard's actual seam (`dispatch(tool, args)`, a function call). Runnable demo, including the rejected-forgery case:
 
 ```bash
 pip install "agentguard[pop]"

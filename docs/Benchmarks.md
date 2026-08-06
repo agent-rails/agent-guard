@@ -27,9 +27,9 @@ pytest -q                  # runtime
 
 | Metric | Value |
 |---|---|
-| Test files | 19 |
-| Tests collected | 198 |
-| Result | 196 passed, 2 skipped |
+| Test files | 20 |
+| Tests collected | 208 |
+| Result | 206 passed, 2 skipped |
 | Full-suite wall time | ~6.2s |
 
 **Corrected during review:** an earlier draft of this table reported "168 passed" from a manually `-k`-filtered run that excluded docker/gVisor/E2B-related tests wholesale. That was unnecessarily conservative — the suite already gates those tests properly with `pytest.mark.skipif` (only tests genuinely needing an unavailable environment skip: live Docker, gVisor, or an E2B account).
@@ -53,7 +53,7 @@ grep -c '^  - id:' policy.write-content-scan.example.yaml         # 11
 python -m build && ls -la dist/*.whl
 ```
 
-`agentguard-0.1.0-py3-none-any.whl`: **~44.8 KB**. Core install has zero runtime dependencies (`dependencies = []` in `pyproject.toml`); the `[pop]` extra adds `cryptography`, which is the only optional dependency this project has ever needed.
+`agentguard-0.1.0-py3-none-any.whl`: **~47.6 KB** (this package's own code; up from ~44.8 KB with the RE2 migration's added validation/docstrings). Core install now pulls in one runtime dependency, `google-re2` (a compiled C++ extension, not pure Python — its own wheel is separate and much larger than agentguard's) — no longer `dependencies = []`, a deliberate tradeoff traded for RE2's linear-time matching guarantee; see `docs/DESIGN.md`'s policy-engine section for why. The `[pop]` extra still adds `cryptography`, unchanged.
 
 ## Codebase size
 
@@ -61,4 +61,4 @@ python -m build && ls -la dist/*.whl
 find agent_guard agentguard_identity -name "*.py" | xargs wc -l | tail -1
 ```
 
-**2,466 lines** across both packages combined (`agent_guard` + `agentguard_identity`), excluding tests. Small enough that the ~45 KB wheel isn't surprising — this stayed a focused library, not a framework, through every feature added this session (identity, PoP, write-content-scan, `guard check`), including the fixes found by review after each one shipped.
+**2,540 lines** across both packages combined (`agent_guard` + `agentguard_identity`), excluding tests. Small enough that the ~45 KB wheel isn't surprising — this stayed a focused library, not a framework, through every feature added this session (identity, PoP, write-content-scan, `guard check`), including the fixes found by review after each one shipped.

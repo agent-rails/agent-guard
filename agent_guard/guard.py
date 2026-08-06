@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import functools
+from collections.abc import Callable
 from dataclasses import replace
-from typing import Any, Callable
+from typing import Any
 
 from agentguard_identity.pop import PoPProof, verify_pop
 from agentguard_identity.token import verify as verify_token
