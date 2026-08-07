@@ -35,6 +35,13 @@ The shared shape: before building, ask whether an existing primitive already cov
 
 [Cloudflare's cloudflare-os](https://github.com/cloudflare/cloudflare-os) independently ships a "Gatekeeper" -- a proxy Worker that holds an external credential and can require approval before an agent's action proceeds. Different platform (Cloudflare Workers-specific, not portable), different implementation, but the same shape this project's `Guard` + `require_human` already is: a credential-holding layer in front of tool dispatch, gating on policy. Worth citing as independent validation that "credential-holding proxy in front of agent actions" is a recognized pattern, not a one-off design choice -- not an integration target, since it's tied to Cloudflare's own runtime primitives (Durable Objects, Dynamic Worker Facets) rather than being a portable library.
 
+[Microsoft's Agent Governance Toolkit](https://github.com/microsoft/agent-governance-toolkit) (hosted under the verified `microsoft` GitHub org, but primarily one individual's project -- 857 of ~2000 commits from a single author who is not a Microsoft employee, not a centrally-built Microsoft product; its "AARM"/"ATF" compliance badges are self- or single-person-verified, not independent standards -- checked live before citing, not taken at face value) independently arrives at the same "credential-holding layer in front of tool dispatch, gating on policy" shape at much larger scope (multi-language SDKs, formal RFC-2119 specs, 992 conformance tests). Two things worth naming, not adopting wholesale:
+
+- Its audit log is Merkle-chained (`docs/specs/AUDIT-COMPLIANCE-1.0.md`), proving record *completeness and order*, not just per-record integrity. This project's `SigningAuditSink` only proves a given record wasn't altered after the fact -- it does not prove a record wasn't silently dropped from the log entirely. A real, named gap, tracked in `THREAT_MODEL.md` rather than closed here.
+- Its identity spec states explicitly: "Every agent has a human sponsor. No orphan agents." Neither this project nor `agent-warrant` states that as an explicit principle, even though both structurally assume a human/org is accountable for every agent identity issued. Worth stating outright rather than leaving implicit.
+
+Their `did:mesh:<hex>` identifier is a custom, non-W3C-registered DID method -- the same "ceremony without function" critique `agent-warrant/docs/DESIGN.md` already applied to `did:key` would apply here too; not a reason to adopt it.
+
 ## Reuse, not reimplementation: the two-sided contract
 
 Every place this project reuses its own machinery is a deliberate bet that a single, well-tested implementation beats two similar-but-separately-maintained ones:
@@ -51,5 +58,6 @@ This document is not a claim that the design is finished. Concretely, as of this
 - The credential-detection rule is a keyword match, not a shape detector — stated in `THREAT_MODEL.md`, not glossed over here.
 - Every review this project has had was same-vendor (see `THREAT_MODEL.md`'s residual risks). That's a real gap for a security-critical library, not a footnote.
 - The project has never been published or run against real-world adversarial traffic — every finding to date came from structured internal review of a codebase whose authors already knew what they were looking for.
+- The audit log is per-record signed, not hash-chained — a compromised writer could drop a record silently without detection. See the Microsoft Agent Governance Toolkit citation above; not closed here.
 
 See `docs/THREAT_MODEL.md` for the full per-pillar threat coverage and non-goals, `docs/Evaluation.md` for what was actually tested and what it found, and `docs/Architecture.md` for the component/sequence diagrams.
