@@ -31,6 +31,10 @@ Three separate points in this project's development landed on the same resolutio
 
 The shared shape: before building, ask whether an existing primitive already covers the actual requirement, and if a spec or pattern *almost* fits, extract what's substantively needed and discard the ceremony that was built for someone else's shape of problem.
 
+## External validation, checked live not assumed
+
+[Cloudflare's cloudflare-os](https://github.com/cloudflare/cloudflare-os) independently ships a "Gatekeeper" -- a proxy Worker that holds an external credential and can require approval before an agent's action proceeds. Different platform (Cloudflare Workers-specific, not portable), different implementation, but the same shape this project's `Guard` + `require_human` already is: a credential-holding layer in front of tool dispatch, gating on policy. Worth citing as independent validation that "credential-holding proxy in front of agent actions" is a recognized pattern, not a one-off design choice -- not an integration target, since it's tied to Cloudflare's own runtime primitives (Durable Objects, Dynamic Worker Facets) rather than being a portable library.
+
 ## Reuse, not reimplementation: the two-sided contract
 
 Every place this project reuses its own machinery is a deliberate bet that a single, well-tested implementation beats two similar-but-separately-maintained ones:
