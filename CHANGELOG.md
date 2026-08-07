@@ -4,6 +4,8 @@ Notable changes. This project follows [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-06
+
 - **Breaking**: `arg_patterns` regex matching (`Policy`/`Rule`) now runs on RE2 (`google-re2`), not stdlib `re`. A policy-author-written pattern matched against attacker-controlled content could be forced into catastrophic backtracking by a small crafted payload -- reproduced live, a plausible pattern (`(\w+)+\d`) hung the process 5+ seconds on 31 bytes with no protection. RE2 guarantees linear-time matching by construction, eliminating that vulnerability class rather than mitigating it. Cost: RE2's syntax has no backreferences or lookaround (a pattern using either now fails to load with a clear error, not silently); the core package is no longer zero-dependency; Python floor moved from 3.9 to 3.10 (no `google-re2` wheel for 3.9). No shipped policy used either construct.
 - CLI: `guard check` — companion to `guard explain` for tool shapes explain's
   `{"cmd": ...}`-only CLI can't express. Reads a `{"tool": ..., "args": {...}}`
@@ -49,6 +51,6 @@ Initial public release. (An earlier `v0.0.1` git tag existed but was never publi
 ## Stability
 
 - Public API is everything exported from `agent_guard` and `agentguard_identity` top-level packages.
-- On `0.x`: breaking changes may land in minor releases, called out here and in the release notes. Pin to `~=0.1.0` (or an exact version) if you need stability.
+- On `0.x`: breaking changes may land in minor releases, called out here and in the release notes. Pin to `~=0.2.0` (or an exact version) if you need stability.
 - At `1.0`: semver is enforced — breaking changes only in majors, with a deprecation period.
 - Ships PEP 561 type information (`py.typed`); downstream type-checkers see inline types.

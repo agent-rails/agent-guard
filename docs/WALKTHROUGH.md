@@ -71,7 +71,7 @@ Every call is recorded and attributed to the agent identity, via a JSONL, in-mem
 
 ### Holder-bound tokens (proof-of-possession)
 
-A minted token is a bearer credential by default — the encoded string alone is enough to use it, however obtained. Spawn a sandbox with `RuntimeSpec(pop_enabled=True)` and it generates an Ed25519 keypair; mint with `pop_thumbprint=sandbox.pop_thumbprint()` and the token becomes holder-bound. Using it then requires `sandbox.prove_possession(encoded)` — a fresh, single-token-scoped signed proof — passed to `Guard.from_token(..., pop_proof=proof)`. A captured token with no proof, or a proof from a different sandbox's key, is rejected even though the token's own signature is valid. Requires `pip install "agentguard[pop]"`; omitted entirely, behavior is unchanged.
+A minted token is a bearer credential by default — the encoded string alone is enough to use it, however obtained. Spawn a sandbox with `RuntimeSpec(pop_enabled=True)` and it generates an Ed25519 keypair; mint with `pop_thumbprint=sandbox.pop_thumbprint()` and the token becomes holder-bound. Using it then requires `sandbox.prove_possession(encoded)` — a fresh, single-token-scoped signed proof — passed to `Guard.from_token(..., pop_proof=proof)`. A captured token with no proof, or a proof from a different sandbox's key, is rejected even though the token's own signature is valid. Requires `pip install "toolcall-authz[pop]"`; omitted entirely, behavior is unchanged.
 
 ### Harness-agnostic
 
@@ -79,11 +79,11 @@ Use it in-process with `guard.wrap()`, or as an MCP proxy that gates every `tool
 
 ## How to run it
 
-Install (not yet on PyPI — from GitHub):
+Install:
 
 ```bash
-pip install git+https://github.com/voltagebots/agent-guard.git                     # core, zero runtime deps
-pip install "agentguard[yaml] @ git+https://github.com/voltagebots/agent-guard.git" # + YAML policy files
+pip install toolcall-authz                # core (pulls in google-re2)
+pip install "toolcall-authz[yaml]"        # + YAML policy files
 ```
 
 Python, in 30 seconds:
@@ -129,7 +129,7 @@ python examples/end_to_end.py
 Proof-of-possession demo (holder-bound token, forged-proof rejection):
 
 ```bash
-pip install "agentguard[pop]"
+pip install "toolcall-authz[pop]"
 python examples/pop_example.py
 ```
 
