@@ -87,6 +87,22 @@ def test_decorator_allows_and_blocks():
     assert audit.records[-1].executed is False
 
 
+def test_decorator_audits_allowed_tool_failure():
+    audit = MemoryAuditSink()
+    guard = a_guard(audit)
+
+    @guarded(guard)
+    def failing_tool():
+        raise RuntimeError("tool failed")
+
+    with pytest.raises(RuntimeError, match="tool failed"):
+        failing_tool()
+
+    assert audit.records[-1].executed is True
+    assert audit.records[-1].decision == "allow"
+    assert audit.records[-1].error == "tool failed"
+
+
 def test_decorator_uses_function_name_by_default():
     guard = a_guard()
 
@@ -115,6 +131,14 @@ def test_malformed_params_blocked_not_crashed():
     forward, reply = mcp_handle_line(msg, a_guard())
     assert forward is None
     assert "params" in json.loads(reply)["result"]["content"][0]["text"]
+
+
+@pytest.mark.parametrize("name", [[], None, 123, ""])
+def test_malformed_tool_name_blocked_not_crashed(name):
+    msg = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name}})
+    forward, reply = mcp_handle_line(msg, a_guard())
+    assert forward is None
+    assert "name" in json.loads(reply)["result"]["content"][0]["text"]
 
 
 def test_malformed_arguments_blocked_not_crashed():

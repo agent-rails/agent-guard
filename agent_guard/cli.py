@@ -138,10 +138,10 @@ def _run(args) -> int:
     allowlist = set(args.allow_digest)
     if args.dev_trust_runtime:
         allowlist.add(attestation.code_digest)
-    result = LocalAttestor(allowlist).verify(attestation)
+    attestor = LocalAttestor(allowlist)
 
     try:
-        token = broker_mint(result, args)
+        token = broker_mint(attestor, attestation, args)
     except RefusedError as err:
         print(f"refused: {err}", file=sys.stderr)
         sandbox.close()
@@ -189,11 +189,11 @@ def _mcp(args) -> int:
     return run_proxy(server_cmd, guard)
 
 
-def broker_mint(result, args):
+def broker_mint(attestor, attestation, args):
     secret = os.urandom(32)
     grant = set(args.scope)
     return Broker(secret=secret, ttl_seconds=args.ttl).mint(
-        result, subject=args.subject, human_grant=grant, task_scope=grant
+        attestor, attestation, subject=args.subject, human_grant=grant, task_scope=grant
     )
 
 

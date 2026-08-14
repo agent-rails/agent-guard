@@ -29,6 +29,7 @@ class AuditRecord:
     rule_id: str | None
     executed: bool
     sig: str | None = None
+    error: str | None = None
 
 
 class AuditSink(Protocol):
@@ -166,7 +167,14 @@ class MultiAuditSink:
             raise RuntimeError(f"{len(errors)} of {len(self._sinks)} audit sink(s) failed: {errors}")
 
 
-def build_record(agent_id: str, tool: str, args: dict[str, Any], verdict: Verdict, executed: bool) -> AuditRecord:
+def build_record(
+    agent_id: str,
+    tool: str,
+    args: dict[str, Any],
+    verdict: Verdict,
+    executed: bool,
+    error: str | None = None,
+) -> AuditRecord:
     return AuditRecord(
         ts=datetime.now(timezone.utc).isoformat(),
         agent_id=agent_id,
@@ -176,4 +184,5 @@ def build_record(agent_id: str, tool: str, args: dict[str, Any], verdict: Verdic
         reason=verdict.reason,
         rule_id=verdict.rule_id,
         executed=executed,
+        error=error,
     )

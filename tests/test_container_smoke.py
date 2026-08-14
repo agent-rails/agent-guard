@@ -43,8 +43,8 @@ def test_container_identity_mints_local_container_tier():
     sandbox = ContainerRuntime().spawn(RuntimeSpec(kind="local.container", image=IMAGE))
     try:
         attestation = sandbox.attest()
-        result = LocalAttestor(allowlist={attestation.code_digest}).verify(attestation)
-        token = Broker(secret=b"k").mint(result, "human:x", {"exec"}, {"exec"})
+        attestor = LocalAttestor(allowlist={attestation.code_digest})
+        token = Broker(secret=b"k").mint(attestor, attestation, "human:x", {"exec"}, {"exec"})
         assert token.trust_tier == "local.container"
         assert token.sandbox_id == attestation.sandbox_id
     finally:

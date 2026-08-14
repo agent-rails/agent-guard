@@ -179,7 +179,8 @@ guard = Guard(compiled, audit=sink, agent_id="a", judge=LLMJudge(complete))
 
 Fenced, on purpose:
 - The judge may only tighten. Its result is clamped to the rule's `judge_ceiling` (default `require_human`) — it can escalate toward safe, never unilaterally `allow` an irreversible action.
-- Fail-closed. No judge configured, judge errors, or judge times out → fall back to the rule's decision, never a silent allow.
+- Fail-closed. No judge configured or judge errors → fall back to the rule's decision, never a silent allow. The
+  supplied `complete` callable is responsible for enforcing its provider timeout.
 - Use a different model family for security-relevant judging; a same-family self-grade shares its own blind spots.
 
 ## Design stance

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import fnmatch
 from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
@@ -51,6 +52,7 @@ class Guard:
         approver: HumanApprover = deny_by_default,
         trust_tier: str = TRUST_TIERS[0],
         judge: Judge | None = None,
+        scopes: tuple[str, ...] | None = None,
     ) -> None:
         self._policy = policy
         self._audit = audit
@@ -58,6 +60,7 @@ class Guard:
         self._approver = approver
         self._trust_tier = trust_tier
         self._judge = judge
+        self._scopes = scopes
 
     @classmethod
     def from_token(
@@ -104,6 +107,7 @@ class Guard:
             approver=approver,
             trust_tier=token.trust_tier,
             judge=judge,
+            scopes=token.scopes,
         )
 
     def wrap(self, dispatch: ToolDispatch) -> ToolDispatch:
@@ -116,6 +120,12 @@ class Guard:
         """Pure decision: returns (allowed, verdict). Runs policy + judge + human gate but
         does not dispatch or audit. `verdict.decision` keeps its original tier
         (allow/deny/require_human) for the audit record; `allowed` is the gate outcome."""
+        if self._scopes is not None and not any(fnmatch.fnmatch(tool, scope) for scope in self._scopes):
+            return False, Verdict(
+                decision=Decision.DENY,
+                reason=f"tool '{tool}' is outside token scopes",
+                rule_id="token-scope",
+            )
         verdict = self._policy.evaluate(tool, args, self._trust_tier)
         if verdict.needs_judge:
             verdict = self._consult_judge(verdict, tool, args)
@@ -126,8 +136,8 @@ class Guard:
             return approved, verdict
         return True, verdict
 
-    def record(self, tool: str, args: dict[str, Any], verdict: Verdict, executed: bool) -> None:
-        self._audit.write(build_record(self._agent_id, tool, args, verdict, executed))
+    def record(self, tool: str, args: dict[str, Any], verdict: Verdict, executed: bool, error: str | None = None) -> None:
+        self._audit.write(build_record(self._agent_id, tool, args, verdict, executed, error=error))
 
     def call(self, dispatch: ToolDispatch, tool: str, args: dict[str, Any]) -> Any:
         allowed, verdict = self.decide(tool, args)
@@ -135,7 +145,11 @@ class Guard:
             self.record(tool, args, verdict, executed=False)
             reason = verdict.reason if verdict.decision is Decision.DENY else f"human approval denied: {verdict.reason}"
             raise BlockedError(tool, reason)
-        result = dispatch(tool, args)
+        try:
+            result = dispatch(tool, args)
+        except Exception as err:
+            self.record(tool, args, verdict, executed=True, error=str(err))
+            raise
         self.record(tool, args, verdict, executed=True)
         return result
 
@@ -178,7 +192,11 @@ def guarded(guard: Guard, tool_name: str | None = None) -> Callable:
                     verdict.reason if verdict.decision is Decision.DENY else f"human approval denied: {verdict.reason}"
                 )
                 raise BlockedError(name, reason)
-            result = fn(*args, **kwargs)
+            try:
+                result = fn(*args, **kwargs)
+            except Exception as err:
+                guard.record(name, kwargs, verdict, executed=True, error=str(err))
+                raise
             guard.record(name, kwargs, verdict, executed=True)
             return result
 

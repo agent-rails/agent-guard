@@ -7,9 +7,17 @@ from dataclasses import replace
 
 import pytest
 
-from agentguard_identity import AttestationResult, Broker
+from agentguard_identity import Attestation, AttestationResult, Broker
 from agentguard_identity.pop import PoPKeypair, PoPProof, public_key_thumbprint, verify_pop
 from agentguard_identity.token import sign, verify
+
+
+class _StubAttestor:
+    def __init__(self, result: AttestationResult) -> None:
+        self._result = result
+
+    def verify(self, attestation: Attestation) -> AttestationResult:
+        return self._result
 
 
 def test_generate_and_thumbprint_are_deterministic_for_the_same_key():
@@ -125,13 +133,23 @@ def test_non_numeric_iat_fails_closed_not_raises():
         assert verify_pop(bad, "some-encoded-token", keypair.thumbprint(), now=1000.0) is False
 
 
+def test_huge_integer_iat_fails_closed_not_raises():
+    keypair = PoPKeypair.generate()
+    proof = keypair.prove("some-encoded-token", now=1000.0)
+    bad = replace(proof, iat=10**400)
+    assert verify_pop(bad, "some-encoded-token", keypair.thumbprint(), now=1000.0) is False
+
+
 def test_cnf_cannot_be_stripped_to_downgrade_a_holder_bound_token_to_bearer():
     # The load-bearing invariant: cnf lives inside the HMAC-signed payload, so it
     # can't be removed/altered without invalidating the signature. If a future refactor
     # ever excluded cnf from the signed body, this is the test that would catch it.
     keypair = PoPKeypair.generate()
-    attestation = AttestationResult(verified=True, trust_tier="remote.microvm", sandbox_id="s1", reason="test")
-    token = Broker(secret=b"k").mint(attestation, "human:x", {"a"}, {"a"}, pop_thumbprint=keypair.thumbprint())
+    result = AttestationResult(verified=True, trust_tier="remote.microvm", sandbox_id="s1", reason="test")
+    attestation = Attestation(runtime_kind="remote.microvm", code_digest="test", sandbox_id="s1")
+    token = Broker(secret=b"k").mint(
+        _StubAttestor(result), attestation, "human:x", {"a"}, {"a"}, pop_thumbprint=keypair.thumbprint()
+    )
     encoded = sign(token, b"k")
 
     body_b64, mac_b64 = encoded.split(".", 1)

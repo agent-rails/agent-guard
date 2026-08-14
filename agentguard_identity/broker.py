@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 
-from .attestation import AttestationResult
+from .attestation import Attestation, AttestationResult, Attestor
 from .token import Token
 
 
@@ -19,7 +19,8 @@ class Broker:
 
     def mint(
         self,
-        attestation: AttestationResult,
+        attestor: Attestor,
+        attestation: Attestation,
         subject: str,
         human_grant: set[str],
         task_scope: set[str],
@@ -31,15 +32,18 @@ class Broker:
         via its `cnf` claim — presenting the encoded token alone won't be enough to use
         it, a fresh PoPProof signed by that key is also required. Omit for a plain
         bearer token, unchanged from before PoP existed."""
-        if not attestation.verified:
-            raise RefusedError(f"unverified attestation, no token minted: {attestation.reason}")
+        if isinstance(attestor, AttestationResult):
+            raise TypeError("mint expects an Attestor and raw Attestation, not an AttestationResult")
+        result = attestor.verify(attestation)
+        if not result.verified:
+            raise RefusedError(f"unverified attestation, no token minted: {result.reason}")
         now = now if now is not None else time.time()
         scopes = human_grant & task_scope
         return Token(
             subject=subject,
-            agent_id=f"agent:{attestation.sandbox_id}",
-            sandbox_id=attestation.sandbox_id,
-            trust_tier=attestation.trust_tier,
+            agent_id=f"agent:{result.sandbox_id}",
+            sandbox_id=result.sandbox_id,
+            trust_tier=result.trust_tier,
             scopes=tuple(sorted(scopes)),
             exp=now + self._ttl,
             cnf=pop_thumbprint,

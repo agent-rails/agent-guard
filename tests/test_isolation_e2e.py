@@ -69,12 +69,15 @@ def test_isolation_e2e_gvisor_tier_gates_authorization():
     sandbox = runtime.spawn()
 
     # WHO: attest the runtime, mint a scoped identity at the attested tier
-    result = ProviderAttestor(template_allowlist={"base-gvisor"}).verify(sandbox.attest())
+    attestor = ProviderAttestor(template_allowlist={"base-gvisor"})
+    attestation = sandbox.attest()
+    result = attestor.verify(attestation)
     assert result.verified
     assert result.trust_tier == "remote.gvisor"
 
     token = Broker(secret=b"test-secret", ttl_seconds=300).mint(
-        result,
+        attestor,
+        attestation,
         subject="human:test",
         human_grant={"shell", "exec"},
         task_scope={"shell", "exec"},
