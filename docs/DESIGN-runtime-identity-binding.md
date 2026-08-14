@@ -115,10 +115,8 @@ Reuse RFC 8693 (OAuth token exchange) semantics — do not invent crypto.
 
 ```python
 sandbox = runtime.spawn(spec)  # 1 spawn
-att = attestor.verify(sandbox.attest())  # 2 attest
-if not att.verified:
-    raise Refused()  #   fail-closed
-token = broker.mint(att, human_grant, task_scope)  # 3 mint
+attestation = sandbox.attest()
+token = broker.mint(attestor, attestation, human_grant, task_scope)  # 2+3 attest (internal) + mint, fail-closed via RefusedError
 
 guard = Guard(policy, audit=sink, agent_id=token.act.agent_id)  # identity feeds the guard
 guarded = guard.wrap(sandbox.dispatch)  # 4+5 authorize + audit
