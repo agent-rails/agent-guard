@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import functools
 import fnmatch
+import functools
 from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
@@ -136,7 +136,9 @@ class Guard:
             return approved, verdict
         return True, verdict
 
-    def record(self, tool: str, args: dict[str, Any], verdict: Verdict, executed: bool, error: str | None = None) -> None:
+    def record(
+        self, tool: str, args: dict[str, Any], verdict: Verdict, executed: bool, error: str | None = None
+    ) -> None:
         self._audit.write(build_record(self._agent_id, tool, args, verdict, executed, error=error))
 
     def call(self, dispatch: ToolDispatch, tool: str, args: dict[str, Any]) -> Any:

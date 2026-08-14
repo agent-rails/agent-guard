@@ -148,9 +148,7 @@ def test_mint_with_now_zero_is_not_treated_as_unset():
     # or any test/simulation using 0.0 as a valid instant) got a token stamped
     # ttl-seconds-from-wall-clock instead of ttl-seconds-from-0.0.
     att = Attestation(runtime_kind="local.container", code_digest="digest-ok", sandbox_id="s1")
-    token = Broker(secret=b"k", ttl_seconds=300).mint(
-        attestor(), att, "human:x", {"read"}, {"read"}, now=0.0
-    )
+    token = Broker(secret=b"k", ttl_seconds=300).mint(attestor(), att, "human:x", {"read"}, {"read"}, now=0.0)
     assert token.exp == 300.0
 
 
@@ -240,7 +238,6 @@ def test_end_to_end_a_second_sandboxs_proof_cannot_use_the_first_sandboxs_token(
     victim_sandbox = runtime.spawn(RuntimeSpec(code_digest="digest-ok", pop_enabled=True))
     attacker_sandbox = runtime.spawn(RuntimeSpec(code_digest="digest-ok", pop_enabled=True))
 
-    attestation_result = attestor().verify(victim_sandbox.attest())
     token = Broker(secret=b"k").mint(
         attestor(),
         victim_sandbox.attest(),

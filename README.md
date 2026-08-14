@@ -273,7 +273,9 @@ By default a minted token is a bearer credential: whoever holds the encoded stri
 
 ```python
 sandbox = runtime.spawn(RuntimeSpec(code_digest="...", pop_enabled=True))  # generates an Ed25519 keypair
-token = broker.mint(attestor, sandbox.attest(), subject, human_grant, task_scope, pop_thumbprint=sandbox.pop_thumbprint())
+token = broker.mint(
+    attestor, sandbox.attest(), subject, human_grant, task_scope, pop_thumbprint=sandbox.pop_thumbprint()
+)
 encoded = sign(token, secret)
 proof = sandbox.prove_possession(encoded)  # fresh, single-token-scoped, signed by the sandbox's private key
 guard = Guard.from_token(encoded, secret, policy, audit=sink, pop_proof=proof)
