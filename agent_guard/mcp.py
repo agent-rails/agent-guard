@@ -51,6 +51,8 @@ def handle_line(line: str, guard: Guard) -> tuple[str | None, str | None]:
     if not isinstance(params, dict):
         return None, _blocked_response(msg.get("id"), "malformed tools/call: 'params' must be an object")
     name = params.get("name", "")
+    if not isinstance(name, str) or not name:
+        return None, _blocked_response(msg.get("id"), "malformed tools/call: 'name' must be a non-empty string")
     raw_args = params.get("arguments")
     if raw_args is not None and not isinstance(raw_args, dict):
         return None, _blocked_response(msg.get("id"), "malformed tools/call: 'arguments' must be an object")

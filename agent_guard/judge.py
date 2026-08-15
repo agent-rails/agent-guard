@@ -56,6 +56,8 @@ def build_prompt(request: JudgeRequest) -> str:
 
 
 def parse_verdict(text: str) -> tuple[Decision, str]:
+    if not isinstance(text, str):
+        return Decision.DENY, "non-string judge output, fail-closed"
     upper = text.upper()
     for token, decision in (
         ("DENY", Decision.DENY),

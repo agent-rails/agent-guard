@@ -179,7 +179,8 @@ guard = Guard(compiled, audit=sink, agent_id="a", judge=LLMJudge(complete))
 
 Fenced, on purpose:
 - The judge may only tighten. Its result is clamped to the rule's `judge_ceiling` (default `require_human`) — it can escalate toward safe, never unilaterally `allow` an irreversible action.
-- Fail-closed. No judge configured, judge errors, or judge times out → fall back to the rule's decision, never a silent allow.
+- Fail-closed. No judge configured or judge errors → fall back to the rule's decision, never a silent allow. The
+  supplied `complete` callable is responsible for enforcing its provider timeout.
 - Use a different model family for security-relevant judging; a same-family self-grade shares its own blind spots.
 
 ## Design stance
@@ -272,7 +273,9 @@ By default a minted token is a bearer credential: whoever holds the encoded stri
 
 ```python
 sandbox = runtime.spawn(RuntimeSpec(code_digest="...", pop_enabled=True))  # generates an Ed25519 keypair
-token = broker.mint(attestation_result, subject, human_grant, task_scope, pop_thumbprint=sandbox.pop_thumbprint())
+token = broker.mint(
+    attestor, sandbox.attest(), subject, human_grant, task_scope, pop_thumbprint=sandbox.pop_thumbprint()
+)
 encoded = sign(token, secret)
 proof = sandbox.prove_possession(encoded)  # fresh, single-token-scoped, signed by the sandbox's private key
 guard = Guard.from_token(encoded, secret, policy, audit=sink, pop_proof=proof)

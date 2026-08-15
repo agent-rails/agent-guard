@@ -54,6 +54,20 @@ def test_parse_verdict_fails_closed_on_garbage():
     assert parse_verdict("the model rambled with no verdict")[0] is Decision.DENY
 
 
+def test_parse_verdict_fails_closed_on_non_string_output():
+    decision, reason = parse_verdict(None)
+    assert decision is Decision.DENY
+    assert "non-string" in reason
+
+
+def test_llm_judge_fails_closed_on_non_string_provider_output():
+    decision, reason = LLMJudge(complete=lambda p: None).evaluate(
+        JudgeRequest("a", "write", {}, "ambiguous", Decision.ALLOW)
+    )
+    assert decision is Decision.DENY
+    assert "non-string" in reason
+
+
 def test_build_prompt_includes_ceiling_and_tool():
     req = JudgeRequest("a", "write", {"path": "/etc"}, "ambiguous", Decision.REQUIRE_HUMAN)
     prompt = build_prompt(req)
@@ -154,8 +168,8 @@ def test_rule_from_dict_rejects_ceiling_above_decision():
 
 def test_remote_end_to_end_with_broker():
     sandbox = RemoteSandbox(FakeRemoteClient())
-    result = ProviderAttestor({"trusted-template"}).verify(sandbox.attest())
-    token = Broker(secret=b"k").mint(result, "human:x", {"exec"}, {"exec"})
+    attestor = ProviderAttestor({"trusted-template"})
+    token = Broker(secret=b"k").mint(attestor, sandbox.attest(), "human:x", {"exec"}, {"exec"})
     assert token.trust_tier == "remote.gvisor"
     assert sandbox.dispatch("shell", {"cmd": "ls"}) == "remote-ran:ls"
 
@@ -177,8 +191,10 @@ def test_remote_sandbox_pop_enabled_generates_a_usable_keypair():
 
 def test_remote_end_to_end_with_pop():
     sandbox = RemoteSandbox(FakeRemoteClient(), pop_enabled=True)
-    result = ProviderAttestor({"trusted-template"}).verify(sandbox.attest())
-    token = Broker(secret=b"k").mint(result, "human:x", {"exec"}, {"exec"}, pop_thumbprint=sandbox.pop_thumbprint())
+    attestor = ProviderAttestor({"trusted-template"})
+    token = Broker(secret=b"k").mint(
+        attestor, sandbox.attest(), "human:x", {"*"}, {"*"}, pop_thumbprint=sandbox.pop_thumbprint()
+    )
     encoded = sign(token, b"k")
     proof = sandbox.prove_possession(encoded)
     policy = Policy.from_dict({"default": "allow", "rules": []})

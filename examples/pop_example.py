@@ -28,12 +28,12 @@ def main() -> None:
     # The legitimate sandbox spawns with pop_enabled=True: it generates its own
     # Ed25519 keypair, and the private key never leaves the sandbox.
     victim = runtime.spawn(RuntimeSpec(code_digest="sha256:agent-image-v1", pop_enabled=True))
-    result = attestor.verify(victim.attest())
+    victim_attestation = victim.attest()
     # pop_thumbprint() -> the token's cnf claim. Holding this token alone is no longer
     # sufficient to use it — the presenter must also sign a fresh proof with the key
     # that produced this thumbprint.
     token = Broker(secret=secret).mint(
-        result, "human:frank", {"read"}, {"read"}, pop_thumbprint=victim.pop_thumbprint()
+        attestor, victim_attestation, "human:frank", {"read"}, {"read"}, pop_thumbprint=victim.pop_thumbprint()
     )
     encoded_token = sign(token, secret)
     print(f"minted a HOLDER-BOUND token: cnf={token.cnf[:12]}...\n")

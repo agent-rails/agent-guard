@@ -66,7 +66,8 @@ def spawn_attest_mint_with_pop() -> tuple:
         RuntimeSpec(code_digest=image_digest, kind="local.container", image=IMAGE, pop_enabled=True)
     )
     attestor = LocalAttestor(allowlist={image_digest})
-    result = attestor.verify(sandbox.attest())
+    attestation = sandbox.attest()
+    result = attestor.verify(attestation)
     print(
         f"attestation: verified={result.verified} tier={result.trust_tier} "
         f"sandbox={result.sandbox_id} ({result.reason})"
@@ -78,7 +79,8 @@ def spawn_attest_mint_with_pop() -> tuple:
     secret = b"guarded-autonomous-agent-pop-example-secret-do-not-use-in-prod"
     broker = Broker(secret=secret, ttl_seconds=600)
     token = broker.mint(
-        result,
+        attestor,
+        attestation,
         subject="guarded-autonomous-agent-pop-example",
         human_grant={"exec"},
         task_scope={"exec"},

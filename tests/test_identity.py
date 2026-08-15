@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
+
 import pytest
 
 from agent_guard import Guard, MemoryAuditSink, Policy
 from agentguard_identity import (
     Attestation,
+    AttestationResult,
     Broker,
     LocalAttestor,
     LocalRuntime,
@@ -42,9 +48,8 @@ def test_local_attestor_refuses_remote_claims():
 
 def test_broker_refuses_unverified_attestation():
     att = Attestation(runtime_kind="remote.microvm", code_digest="digest-ok", sandbox_id="s1")
-    result = attestor().verify(att)
     with pytest.raises(RefusedError):
-        Broker(secret=b"k").mint(result, "human:x", {"a"}, {"a"})
+        Broker(secret=b"k").mint(attestor(), att, "human:x", {"a"}, {"a"})
 
 
 def test_broker_requires_secret():
@@ -54,8 +59,7 @@ def test_broker_requires_secret():
 
 def test_mint_intersects_scopes():
     att = Attestation(runtime_kind="local.container", code_digest="digest-ok", sandbox_id="s1")
-    result = attestor().verify(att)
-    token = Broker(secret=b"k").mint(result, "human:x", {"read", "write", "admin"}, {"read", "write"})
+    token = Broker(secret=b"k").mint(attestor(), att, "human:x", {"read", "write", "admin"}, {"read", "write"})
     assert set(token.scopes) == {"read", "write"}
     assert token.agent_id == "agent:s1"
     assert token.trust_tier == "local.container"
@@ -63,7 +67,7 @@ def test_mint_intersects_scopes():
 
 def test_token_sign_and_verify_roundtrip():
     att = Attestation(runtime_kind="local.container", code_digest="digest-ok", sandbox_id="s1")
-    token = Broker(secret=b"k").mint(attestor().verify(att), "human:x", {"read"}, {"read"})
+    token = Broker(secret=b"k").mint(attestor(), att, "human:x", {"read"}, {"read"})
     encoded = sign(token, b"k")
     restored = verify(encoded, b"k")
     assert restored.agent_id == token.agent_id
@@ -72,7 +76,7 @@ def test_token_sign_and_verify_roundtrip():
 
 def test_sign_rejects_empty_secret():
     att = Attestation(runtime_kind="local.container", code_digest="digest-ok", sandbox_id="s1")
-    token = Broker(secret=b"k").mint(attestor().verify(att), "human:x", {"read"}, {"read"})
+    token = Broker(secret=b"k").mint(attestor(), att, "human:x", {"read"}, {"read"})
     with pytest.raises(ValueError):
         sign(token, b"")
 
@@ -82,7 +86,7 @@ def test_verify_rejects_empty_secret():
     # so anyone could self-sign a top-tier token with no Broker involved at all,
     # reopening the exact hand-typed-tier escalation from_token exists to close.
     att = Attestation(runtime_kind="local.container", code_digest="digest-ok", sandbox_id="s1")
-    token = Broker(secret=b"k").mint(attestor().verify(att), "human:x", {"read"}, {"read"})
+    token = Broker(secret=b"k").mint(attestor(), att, "human:x", {"read"}, {"read"})
     encoded = sign(token, b"k")
     with pytest.raises(ValueError):
         verify(encoded, b"")
@@ -90,7 +94,7 @@ def test_verify_rejects_empty_secret():
 
 def test_tampered_token_is_rejected():
     att = Attestation(runtime_kind="local.container", code_digest="digest-ok", sandbox_id="s1")
-    token = Broker(secret=b"k").mint(attestor().verify(att), "human:x", {"read"}, {"read"})
+    token = Broker(secret=b"k").mint(attestor(), att, "human:x", {"read"}, {"read"})
     encoded = sign(token, b"k")
     with pytest.raises(ValueError):
         verify(encoded, b"wrong-secret")
@@ -98,10 +102,44 @@ def test_tampered_token_is_rejected():
 
 def test_expired_token_is_rejected():
     att = Attestation(runtime_kind="local.container", code_digest="digest-ok", sandbox_id="s1")
-    token = Broker(secret=b"k", ttl_seconds=1).mint(attestor().verify(att), "human:x", {"read"}, {"read"}, now=1000.0)
+    token = Broker(secret=b"k", ttl_seconds=1).mint(attestor(), att, "human:x", {"read"}, {"read"}, now=1000.0)
     encoded = sign(token, b"k")
     with pytest.raises(ValueError):
         verify(encoded, b"k", now=2000.0)
+
+
+def signed_payload(payload) -> str:
+    body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    mac = hmac.new(b"k", body, hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(body).decode() + "." + base64.urlsafe_b64encode(mac).decode()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "subject": "human:x",
+            "sandbox_id": "s1",
+            "trust_tier": "local.container",
+            "scopes": ["read"],
+            "exp": 10**12,
+            "issuer": "agent-guard.local",
+        },
+        {
+            "subject": "human:x",
+            "agent_id": "agent:s1",
+            "sandbox_id": "s1",
+            "trust_tier": "local.container",
+            "scopes": None,
+            "exp": "later",
+            "issuer": "agent-guard.local",
+        },
+        [],
+    ],
+)
+def test_verify_rejects_malformed_correctly_signed_payloads(payload):
+    with pytest.raises(ValueError, match="malformed token"):
+        verify(signed_payload(payload), b"k")
 
 
 def test_mint_with_now_zero_is_not_treated_as_unset():
@@ -110,8 +148,15 @@ def test_mint_with_now_zero_is_not_treated_as_unset():
     # or any test/simulation using 0.0 as a valid instant) got a token stamped
     # ttl-seconds-from-wall-clock instead of ttl-seconds-from-0.0.
     att = Attestation(runtime_kind="local.container", code_digest="digest-ok", sandbox_id="s1")
-    token = Broker(secret=b"k", ttl_seconds=300).mint(attestor().verify(att), "human:x", {"read"}, {"read"}, now=0.0)
+    token = Broker(secret=b"k", ttl_seconds=300).mint(attestor(), att, "human:x", {"read"}, {"read"}, now=0.0)
     assert token.exp == 300.0
+
+
+def test_broker_rejects_a_caller_constructed_attestation_result():
+    forged = AttestationResult(True, "remote.microvm", "s1", "attacker asserted")
+    att = Attestation(runtime_kind="local.process", code_digest="rogue", sandbox_id="s1")
+    with pytest.raises(TypeError, match="AttestationResult"):
+        Broker(secret=b"k").mint(forged, att, "human:x", {"admin"}, {"admin"})
 
 
 def test_expired_with_now_zero_is_not_treated_as_unset():
@@ -169,7 +214,7 @@ def test_end_to_end_spawn_attest_mint_prove_dispatch_with_pop():
     assert attestation_result.verified is True
 
     token = Broker(secret=b"k").mint(
-        attestation_result, "human:x", {"prod_write"}, {"prod_write"}, pop_thumbprint=sandbox.pop_thumbprint()
+        attestor(), sandbox.attest(), "human:x", {"prod_write"}, {"prod_write"}, pop_thumbprint=sandbox.pop_thumbprint()
     )
     encoded = sign(token, b"k")
     proof = sandbox.prove_possession(encoded)
@@ -193,9 +238,13 @@ def test_end_to_end_a_second_sandboxs_proof_cannot_use_the_first_sandboxs_token(
     victim_sandbox = runtime.spawn(RuntimeSpec(code_digest="digest-ok", pop_enabled=True))
     attacker_sandbox = runtime.spawn(RuntimeSpec(code_digest="digest-ok", pop_enabled=True))
 
-    attestation_result = attestor().verify(victim_sandbox.attest())
     token = Broker(secret=b"k").mint(
-        attestation_result, "human:x", {"a"}, {"a"}, pop_thumbprint=victim_sandbox.pop_thumbprint()
+        attestor(),
+        victim_sandbox.attest(),
+        "human:x",
+        {"a"},
+        {"a"},
+        pop_thumbprint=victim_sandbox.pop_thumbprint(),
     )
     encoded = sign(token, b"k")
 

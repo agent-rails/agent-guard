@@ -52,17 +52,34 @@ def verify(encoded: str, secret: bytes, now: float | None = None) -> Token:
     expected = hmac.new(secret, body, hashlib.sha256).digest()
     if not hmac.compare_digest(expected, base64.urlsafe_b64decode(mac_b64)):
         raise ValueError("token signature invalid")
-    payload = json.loads(body)
-    token = Token(
-        subject=payload["subject"],
-        agent_id=payload["agent_id"],
-        sandbox_id=payload["sandbox_id"],
-        trust_tier=payload["trust_tier"],
-        scopes=tuple(payload["scopes"]),
-        exp=payload["exp"],
-        issuer=payload["issuer"],
-        cnf=payload.get("cnf"),
-    )
+    try:
+        payload = json.loads(body)
+        if not isinstance(payload, dict):
+            raise TypeError("payload must be an object")
+        for field in ("subject", "agent_id", "sandbox_id", "trust_tier", "issuer"):
+            if not isinstance(payload.get(field), str):
+                raise TypeError(f"field '{field}' must be a string")
+        scopes = payload.get("scopes")
+        if not isinstance(scopes, list) or not all(isinstance(scope, str) for scope in scopes):
+            raise TypeError("field 'scopes' must be a list of strings")
+        exp = payload.get("exp")
+        if isinstance(exp, bool) or not isinstance(exp, (int, float)):
+            raise TypeError("field 'exp' must be a number")
+        cnf = payload.get("cnf")
+        if cnf is not None and not isinstance(cnf, str):
+            raise TypeError("field 'cnf' must be a string or null")
+        token = Token(
+            subject=payload["subject"],
+            agent_id=payload["agent_id"],
+            sandbox_id=payload["sandbox_id"],
+            trust_tier=payload["trust_tier"],
+            scopes=tuple(scopes),
+            exp=exp,
+            issuer=payload["issuer"],
+            cnf=cnf,
+        )
+    except (json.JSONDecodeError, TypeError, UnicodeDecodeError) as err:
+        raise ValueError(f"malformed token: {err}") from err
     if token.expired(now):
         raise ValueError("token expired")
     return token

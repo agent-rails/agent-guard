@@ -126,7 +126,7 @@ def verify_pop(
         # breaking this function's own "never raises" contract for a whole input class.
         if isinstance(proof.iat, bool) or not isinstance(proof.iat, (int, float)) or not math.isfinite(proof.iat):
             return False
-    except (binascii.Error, ValueError, TypeError):
+    except (binascii.Error, ValueError, TypeError, OverflowError):
         return False
     now = now if now is not None else time.time()
     if abs(now - proof.iat) > max_age_seconds:

@@ -3,13 +3,21 @@ from __future__ import annotations
 import pytest
 
 from agent_guard import BlockedError, Decision, Guard, MemoryAuditSink, Policy
-from agentguard_identity import AttestationResult, Broker
+from agentguard_identity import Attestation, AttestationResult, Broker
 from agentguard_identity.pop import PoPKeypair
 from agentguard_identity.token import Token, sign
 
 
 def raw_dispatch(tool: str, args: dict) -> str:
     return f"ran:{tool}"
+
+
+class StubAttestor:
+    def __init__(self, result: AttestationResult) -> None:
+        self._result = result
+
+    def verify(self, attestation: Attestation) -> AttestationResult:
+        return self._result
 
 
 def make_policy(default: str = "allow") -> Policy:
@@ -54,6 +62,19 @@ def test_allow_passes_through_and_audits():
     assert result == "ran:sql"
     assert audit.records[-1].executed is True
     assert audit.records[-1].decision == "allow"
+
+
+def test_allowed_dispatch_failure_is_audited():
+    guard, audit = make_guard()
+
+    def failing_dispatch(tool: str, args: dict) -> str:
+        raise RuntimeError("dispatch failed")
+
+    with pytest.raises(RuntimeError, match="dispatch failed"):
+        guard.call(failing_dispatch, "sql", {"query": "SELECT 1"})
+    assert audit.records[-1].executed is True
+    assert audit.records[-1].decision == "allow"
+    assert audit.records[-1].error == "dispatch failed"
 
 
 def test_deny_blocks_and_does_not_execute():
@@ -150,8 +171,34 @@ SECRET = b"k"
 
 def mint_encoded(trust_tier: str, secret: bytes = SECRET, ttl_seconds: int = 300, now: float | None = None) -> str:
     result = AttestationResult(verified=True, trust_tier=trust_tier, sandbox_id="s1", reason="test-stub")
-    token = Broker(secret=secret, ttl_seconds=ttl_seconds).mint(result, "human:x", {"a"}, {"a"}, now=now)
+    attestation = Attestation(runtime_kind=trust_tier, code_digest="test", sandbox_id="s1")
+    token = Broker(secret=secret, ttl_seconds=ttl_seconds).mint(
+        StubAttestor(result), attestation, "human:x", {"*"}, {"*"}, now=now
+    )
     return sign(token, secret)
+
+
+def mint_scoped_encoded(scopes: set[str]) -> str:
+    result = AttestationResult(verified=True, trust_tier="local.process", sandbox_id="s1", reason="test-stub")
+    attestation = Attestation(runtime_kind="local.process", code_digest="test", sandbox_id="s1")
+    token = Broker(secret=SECRET).mint(StubAttestor(result), attestation, "human:x", scopes, scopes)
+    return sign(token, SECRET)
+
+
+def test_from_token_enforces_scopes_before_allow_policy():
+    encoded = mint_scoped_encoded({"read"})
+    audit = MemoryAuditSink()
+    policy = Policy.from_dict({"default": "allow", "rules": []})
+    guard = Guard.from_token(encoded, SECRET, policy, audit=audit)
+
+    with pytest.raises(BlockedError):
+        guard.call(raw_dispatch, "write", {})
+
+    assert audit.records[-1].decision == "deny"
+    assert audit.records[-1].rule_id == "token-scope"
+    assert audit.records[-1].executed is False
+    assert guard.call(raw_dispatch, "read", {}) == "ran:read"
+    assert audit.records[-1].executed is True
 
 
 def test_from_token_binds_trust_tier_not_a_typed_string():
@@ -227,7 +274,10 @@ def test_from_token_rejects_a_token_signed_with_a_different_secret():
 def mint_pop_bound(trust_tier: str = "remote.microvm") -> tuple[str, PoPKeypair]:
     keypair = PoPKeypair.generate()
     result = AttestationResult(verified=True, trust_tier=trust_tier, sandbox_id="s1", reason="test-stub")
-    token = Broker(secret=SECRET).mint(result, "human:x", {"a"}, {"a"}, pop_thumbprint=keypair.thumbprint())
+    attestation = Attestation(runtime_kind=trust_tier, code_digest="test", sandbox_id="s1")
+    token = Broker(secret=SECRET).mint(
+        StubAttestor(result), attestation, "human:x", {"*"}, {"*"}, pop_thumbprint=keypair.thumbprint()
+    )
     return sign(token, SECRET), keypair
 
 

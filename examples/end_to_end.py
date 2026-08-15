@@ -53,14 +53,16 @@ def main() -> None:
 
     # WHO: attest the runtime, then mint a scoped short-lived identity
     attestor = LocalAttestor(allowlist={"sha256:agent-image-v1"})
-    result = attestor.verify(sandbox.attest())
+    attestation = sandbox.attest()
+    result = attestor.verify(attestation)
     print(f"attestation: verified={result.verified} tier={result.trust_tier} ({result.reason})")
 
     secret = b"local-dev-secret"
     broker = Broker(secret=secret, ttl_seconds=300)
     try:
         token = broker.mint(
-            result,
+            attestor,
+            attestation,
             subject="human:frank",
             human_grant={"read:repo", "write:branch", "sql"},
             task_scope={"read:repo", "sql", "prod_write"},
