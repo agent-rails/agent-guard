@@ -9,7 +9,7 @@ An agent running with its operator's full permissions, with no record of what it
 That constraint drives almost every other decision in this project:
 
 - **Deterministic policy, not an LLM judging its own output.** A rule either matches or it doesn't; the decision is reproducible, testable, and not attackable by the thing it's supposed to constrain. An `LLMJudge` exists, but it can only *tighten* a verdict toward `require_human` within a rule's ceiling — it is advisory within hard bounds set by static policy, never the boundary itself.
-- **Identity, authorization, and audit as three distinct concerns**, not one blob. `agentguard_identity` does not import `agent_guard`, and vice versa — the block boundary is deliberate. Identity answers *who/where*; the guard answers *what*; the audit sink answers *did*. Coupling them would make each harder to reason about, test, and reuse independently.
+- **Identity, authorization, and audit as three distinct concerns**, not one blob. `agentguard_identity` has zero dependency on `agent_guard`; `agent_guard` depends on identity only through *verification* (`from_token`, PoP), never the reverse. Identity answers *who/where*; the guard answers *what*; the audit sink answers *did*. That asymmetric coupling is deliberate and correct — authorization has to verify identity to mean anything — while identity stays independently testable and reusable with zero knowledge of how it's consumed.
 
 ## Four pillars, one flow
 

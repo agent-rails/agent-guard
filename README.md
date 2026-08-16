@@ -263,7 +263,7 @@ It spawns a local sandbox, attests it, mints an identity whose scopes are `human
 
 Note the composition: the token is signed (`sign(token, secret)`) and the guard is built via `Guard.from_token(encoded, secret, ...)`, which re-verifies the signature rather than trusting `agent_id`/`trust_tier` as caller-supplied strings. The plain `Guard(...)` constructor still exists for local/no-identity use, but once a `Broker` is in the picture, `from_token` is the only path `min_trust_tier` rules should be relied on against.
 
-The block boundary is deliberate: `agentguard_identity` does not import `agent_guard` and vice versa; the examples wire them. Identity says *who/where*, the guard says *what*, the audit sink says *did*. See `docs/DESIGN-runtime-identity-binding.md` for the local-and-remote design and the honest trust gradient.
+The block boundary is deliberate and asymmetric: `agentguard_identity` has zero dependency on `agent_guard`; `agent_guard` depends on identity only through verification (`from_token`, PoP), never the reverse. Identity says *who/where*, the guard says *what*, the audit sink says *did*. See `docs/DESIGN-runtime-identity-binding.md` for the local-and-remote design and the honest trust gradient.
 
 `end_to_end.py` proves the mechanism with scripted, hardcoded tool calls. For the same mechanism against a real, autonomous Claude agent deciding its own tool calls — genuinely running inside a real Docker container agent-guard spawned and attested, not a claim about isolation — see [`examples/guarded_autonomous_agent/`](examples/guarded_autonomous_agent/).
 
