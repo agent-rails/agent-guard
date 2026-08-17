@@ -19,6 +19,7 @@ from .mcp import run_proxy as mcp_run_proxy
 from .policy import Policy, Rule, load_policy
 from .registry import CompiledPolicy, PolicyModule, PolicyRegistry
 from .tiers import TRUST_TIERS
+from .velocity import InMemoryVelocityLimiter, VelocityLimiter, VelocityRule
 
 __all__ = [
     "ApprovalRequest",
@@ -46,6 +47,9 @@ __all__ = [
     "Rule",
     "SigningAuditSink",
     "TRUST_TIERS",
+    "InMemoryVelocityLimiter",
+    "VelocityLimiter",
+    "VelocityRule",
     "Verdict",
     "bundled_module",
     "bundled_names",
