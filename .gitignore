@@ -6,3 +6,5 @@ audit*.jsonl
 .venv/
 dist/
 build/
+.env
+.claude/worktrees/
