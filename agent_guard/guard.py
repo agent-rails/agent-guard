@@ -14,6 +14,7 @@ from .decision import Decision, Verdict, clamp
 from .judge import Judge, JudgeRequest
 from .policy import Policy
 from .tiers import TRUST_TIERS
+from .velocity import VelocityLimiter
 
 ToolDispatch = Callable[[str, dict], Any]
 HumanApprover = Callable[["ApprovalRequest"], bool]
@@ -53,6 +54,7 @@ class Guard:
         trust_tier: str = TRUST_TIERS[0],
         judge: Judge | None = None,
         scopes: tuple[str, ...] | None = None,
+        velocity: VelocityLimiter | None = None,
     ) -> None:
         self._policy = policy
         self._audit = audit
@@ -61,6 +63,7 @@ class Guard:
         self._trust_tier = trust_tier
         self._judge = judge
         self._scopes = scopes
+        self._velocity = velocity
 
     @classmethod
     def from_token(
@@ -73,6 +76,7 @@ class Guard:
         judge: Judge | None = None,
         now: float | None = None,
         pop_proof: PoPProof | None = None,
+        velocity: VelocityLimiter | None = None,
     ) -> Guard:
         """Bind agent_id and trust_tier to a token that verifies against `secret` — the
         same HMAC `agentguard_identity.token.sign`/`Broker` use. Takes the encoded string, not a
@@ -108,6 +112,7 @@ class Guard:
             trust_tier=token.trust_tier,
             judge=judge,
             scopes=token.scopes,
+            velocity=velocity,
         )
 
     def wrap(self, dispatch: ToolDispatch) -> ToolDispatch:
@@ -117,9 +122,16 @@ class Guard:
         return guarded
 
     def decide(self, tool: str, args: dict[str, Any]) -> tuple[bool, Verdict]:
-        """Pure decision: returns (allowed, verdict). Runs policy + judge + human gate but
-        does not dispatch or audit. `verdict.decision` keeps its original tier
-        (allow/deny/require_human) for the audit record; `allowed` is the gate outcome."""
+        """Decision: returns (allowed, verdict). Runs policy + judge + human gate, then the
+        velocity limiter; does not dispatch or audit. `verdict.decision` keeps its original
+        tier (allow/deny/require_human) for the audit record; `allowed` is the gate outcome.
+
+        When a `velocity` limiter is configured this method is no longer side-effect-free:
+        resolving a would-be-allowed call records it against the limiter's window, because
+        rate IS part of the decision. Velocity is consulted only once a call would otherwise
+        proceed — after policy+judge resolve to allow, and (for `require_human`) only after a
+        human actually approves — so a denied or rejected call never consumes velocity budget.
+        """
         if self._scopes is not None and not any(fnmatch.fnmatch(tool, scope) for scope in self._scopes):
             return False, Verdict(
                 decision=Decision.DENY,
@@ -133,8 +145,10 @@ class Guard:
             return False, verdict
         if verdict.decision is Decision.REQUIRE_HUMAN:
             approved = self._approver(ApprovalRequest(self._agent_id, tool, args, verdict.reason))
-            return approved, verdict
-        return True, verdict
+            if not approved:
+                return False, verdict
+            return self._apply_velocity(tool, verdict)
+        return self._apply_velocity(tool, verdict)
 
     def record(
         self, tool: str, args: dict[str, Any], verdict: Verdict, executed: bool, error: str | None = None
@@ -154,6 +168,21 @@ class Guard:
             raise
         self.record(tool, args, verdict, executed=True)
         return result
+
+    def _apply_velocity(self, tool: str, verdict: Verdict) -> tuple[bool, Verdict]:
+        if self._velocity is None:
+            return True, verdict
+        try:
+            breach = self._velocity.check(self._agent_id, tool)
+        except Exception as err:  # noqa: BLE001 - the limiter is a fallible edge; fail closed, never silently allow
+            return False, Verdict(
+                decision=Decision.DENY,
+                reason=f"velocity limiter error ({err}); fail-closed to deny",
+                rule_id="velocity-limit",
+            )
+        if breach is not None:
+            return False, Verdict(decision=Decision.DENY, reason=breach, rule_id="velocity-limit")
+        return True, verdict
 
     def _consult_judge(self, verdict: Verdict, tool: str, args: dict[str, Any]) -> Verdict:
         fallback = verdict.decision

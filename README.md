@@ -183,6 +183,28 @@ Fenced, on purpose:
   supplied `complete` callable is responsible for enforcing its provider timeout.
 - Use a different model family for security-relevant judging; a same-family self-grade shares its own blind spots.
 
+## Velocity limits for machine-speed volume
+
+The static engine gates each call in isolation — correct per call, but blind to *rate*. A run of individually-in-policy calls (the Hugging Face intrusion shape: ~17,600 actions, no single one exotic) passes every static check. An optional `VelocityLimiter` closes the volume dimension: it caps per-agent, per-tool call count over a sliding window, downstream of the RE2 engine, which stays untouched.
+
+```python
+from agent_guard import Guard, InMemoryVelocityLimiter, VelocityRule
+
+limiter = InMemoryVelocityLimiter(
+    rules=(
+        VelocityRule(tools=("*",), max_calls=100, window_seconds=60, id="global"),
+        VelocityRule(tools=("sql",), max_calls=5, window_seconds=60, id="sql-writes"),
+    )
+)
+guard = Guard(policy, audit=sink, agent_id="a", velocity=limiter)
+```
+
+Fenced, on purpose:
+- Opt-in and backward compatible. The constructor default is `None` — no limiter, no behavior change.
+- Consulted only when a call would otherwise proceed — after policy+judge allow, and (for `require_human`) only after a human approves. A denied or rejected call consumes no budget.
+- Fail-closed. If the limiter errors, the call is denied and audited as `rule_id: "velocity-limit"`, never silently allowed.
+- **Call-count only, in-memory only.** It does not detect *sequence* ("read X then write Y"), and a process restart resets counters. `VelocityLimiter` is a protocol so a durable backend (Redis, etc.) swaps in without touching `Guard`. See `docs/THREAT_MODEL.md` for the precise residual.
+
 ## Design stance
 
 - Fail loud at the edge. A policy with no `default` is rejected at load, not silently defaulted.
