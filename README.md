@@ -1,12 +1,22 @@
 # agent-guard
 
+### The authorization and audit boundary for AI agent tool calls.
+
 [![ci](https://github.com/agent-rails/agent-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/agent-rails/agent-guard/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![python](https://img.shields.io/badge/python-3.10%2B-3776ab.svg)](pyproject.toml)
 
-Least-privilege authorization + audit for AI agent tool calls. One small library that wraps the seam every agent has — the tool-dispatch boundary — and decides `allow` / `deny` / `require_human` per call, then logs every decision.
+Policy-as-code at the point where an agent becomes an action: decide `allow`,
+`deny`, or `require_human`, then record what happened and why.
 
-Harness-agnostic by design: it wraps a plain `dispatch(tool, args)` function, which is the shape of a raw agent loop, an MCP `call_tool`, and a native function-calling executor alike. No framework lock-in.
+Built for raw agent loops, MCP servers, native function calling, and existing
+agent frameworks. The boundary is a plain `dispatch(tool, args)` callable, so
+adopting it does not require replacing your stack.
+
+```text
+AI agent → Agent Guard → policy decision → human gate when required → tool
+                         └──────────────────────────────→ audit record
+```
 
 New here? Start with the [walkthrough](docs/WALKTHROUGH.md) — what it solves, how it works, how to run it, and where an LLM judge fits.
 
@@ -14,9 +24,67 @@ Deeper reference: [`docs/DESIGN.md`](docs/DESIGN.md) (why it's shaped this way),
 
 ## The problem
 
-Agents run with their operator's full permissions and no record of what they did. One prompt injection reaches everything the human can touch. `agent-guard` puts a policy-as-code boundary in front of the tool call, so an agent physically cannot run an irreversible action that policy forbids — and every attempt is auditable.
+Agents often inherit the operator's credentials and permissions. Once a model
+can call shell, Git, a database, Kubernetes, or an MCP server, the question that
+decides whether that is governed is:
 
-## Install
+**How do you let an agent use real tools without letting its prompt decide its
+own authority?**
+
+Instructions such as “never modify production” are not enforcement. A prompt
+injection, model mistake, or malformed tool call can cross the same boundary as
+an intended action. Without a separate control, the application may also have
+no durable answer to who requested the action, which rule matched, whether a
+human approved it, or whether it executed.
+
+Agent Guard wraps the tool-dispatch boundary. Policy is evaluated before the
+tool runs; denied calls never reach the tool; approval-required calls fail
+closed without an approver; and the decision is written to an audit sink.
+
+## Why this matters
+
+- **Authority is evaluated outside the prompt.** The model can request an
+  action, but prompt text is not itself an authorization rule. Keep policy
+  files outside the agent's write scope when they are a security boundary.
+- **Irreversible calls can stop for a human.** `require_human` is a real branch
+  in execution, not advisory text in a system prompt.
+- **Every decision is explainable.** Verdicts identify the matched rule and
+  reason; registry-backed policy also identifies its module and layer.
+- **The same boundary travels across stacks.** Wrap a Python function, an MCP
+  server, or the dispatch seam in a custom agent loop.
+- **Identity and isolation can strengthen the decision.** Optional runtime
+  attestation, scoped tokens, proof of possession, containers, and gVisor let
+  policy account for who is acting and where it actually runs.
+
+## What is enforced
+
+The core library enforces authorization and audit. Identity, rate limits, and
+runtime isolation are optional layers rather than implied defaults.
+
+| Control | Core/default behavior |
+|---|---|
+| Policy decision | Ordered rules produce `allow`, `deny`, or `require_human`; every policy must declare its default |
+| Denied call | Never dispatched to the underlying tool |
+| Human gate | Fails closed when no approver is configured or approval is refused |
+| Audit | One structured record per decision through the configured sink |
+| Policy matching | RE2-backed matching over tool name, arguments, and optional trust tier |
+| LLM judge | Optional and ceiling-clamped; it can tighten a decision but cannot grant more authority than policy permits |
+| Velocity limit | Optional per-agent/per-tool sliding-window call-count limit |
+| Identity | Optional signed, scoped runtime identity with proof-of-possession support |
+| Isolation | Optional local process, container/runc, or gVisor runtime; no stronger tier is claimed when unavailable |
+
+## What Agent Guard is — and is not
+
+Agent Guard **is** a tool-call authorization library, human-approval gate,
+policy registry, audit layer, and optional identity/runtime binding.
+
+Agent Guard **is not** an agent framework, malware detector, prompt-injection
+classifier, sandbox engine, or proof that an allowed action is correct.
+Policy decides whether a call is permitted; a runtime such as gVisor, a microVM,
+or a capability-based WASM engine provides execution containment. Those layers
+compose, but they are not interchangeable.
+
+## Quick start
 
 ```bash
 pip install toolcall-authz                # core (pulls in google-re2)
