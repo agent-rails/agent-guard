@@ -1,0 +1,38 @@
+name: stale
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      # Marks only. days-before-*-close: -1 disables automatic closing, so an
+      # unattended bot can never close an outside contributor's work. Flip to a
+      # positive number once the labels have been reviewed in practice.
+      - uses: actions/stale@v11
+        with:
+          days-before-pr-stale: 30
+          days-before-pr-close: -1
+          days-before-issue-stale: 60
+          days-before-issue-close: -1
+          stale-pr-label: stale
+          stale-issue-label: stale
+          exempt-pr-labels: pinned,security,keep
+          exempt-issue-labels: pinned,security,keep
+          stale-pr-message: >
+            No activity for 30 days, so this is marked stale for triage.
+            It will not be closed automatically. Comment or remove the stale
+            label to clear it.
+          stale-issue-message: >
+            No activity for 60 days, so this is marked stale for triage.
+            It will not be closed automatically. Comment or remove the stale
+            label to clear it.
+          operations-per-run: 100
