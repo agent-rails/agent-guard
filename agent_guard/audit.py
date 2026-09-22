@@ -11,7 +11,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, NoReturn, Protocol
 
 from .decision import Verdict
 
@@ -164,41 +164,72 @@ class SigningAuditSink:
 
 
 class MultiAuditSink:
-    """Fan-out to several sinks (e.g. local JSONL + remote SIEM). Attempts every sink
-    even if one fails, so durable local audit survives a flaky remote, then raises an
-    aggregate if any sink failed — never a silent drop.
+    """Fan-out to several sinks (e.g. local JSONL + remote SIEM). An ordinary sink
+    failure never aborts the fan-out — every remaining sink is still attempted, so
+    durable local audit survives a flaky remote — and an aggregate is raised once the
+    fan-out completes if any sink failed, never a silent drop. Terminating signals are
+    the only thing that can cut a fan-out short, under the two rules below.
 
-    A `BaseException` from one sink (a `KeyboardInterrupt` landing inside
-    `WebhookAuditSink`'s blocking POST is the realistic case) does not abort the
-    fan-out either: the remaining sinks are still attempted, so the durable local
-    sink still gets the record. It is NOT collected into the ordinary-error
-    aggregate — wrapping a terminating signal in a `RuntimeError` would swallow it.
-    The first such signal is re-raised once every sink has had its attempt, with any
-    ordinary sink errors chained as `__cause__`. If several sinks raise a
-    `BaseException`, the first one wins and the later ones are dropped."""
+    An operator signal — `KeyboardInterrupt` (Ctrl-C) or `SystemExit` — raised by one
+    sink (one landing inside `WebhookAuditSink`'s blocking POST is the realistic case)
+    does not abort the fan-out: the remaining sinks are still attempted, so the durable
+    local sink still gets the record. The signal is NOT collected into the
+    ordinary-error aggregate — wrapping a terminating signal in a `RuntimeError` would
+    swallow it — and is re-raised as itself once the fan-out completes.
+
+    A SECOND operator signal aborts the fan-out immediately and the sinks after it are
+    not attempted: a repeated Ctrl-C is an unambiguous instruction to stop, and holding
+    it would leave the operator with no way to end a fan-out over slow sinks. The FIRST
+    signal is what propagates, so a later sink can never replace the exception type or
+    the `SystemExit` code; the second instance is not propagated, but is attached to the
+    first as `__context__` so it stays visible in a traceback. This covers signals raised
+    out of a sink's `write`, which is where a blocking sink spends its time; one landing
+    in the narrow gap between two sink calls is outside the `try` and simply propagates
+    as itself, abandoning any held signal and any errors collected so far.
+
+    Only `KeyboardInterrupt` and `SystemExit` are held this way. Every other
+    `BaseException` — `asyncio.CancelledError` and `GeneratorExit` in particular —
+    propagates immediately with the remaining sinks unattempted, because holding a
+    cancellation across a later blocking sink write is how cooperative cancellation and
+    `Task.cancel()` timeouts get broken. On that path the record does not reach the
+    remaining sinks and ordinary sink errors collected so far are not reported: prompt
+    cancellation is worth more than a complete fan-out, and the caller is unwinding
+    anyway.
+
+    Ordinary sink errors from the same fan-out are chained onto the propagating signal
+    as `__cause__`, nested above any cause the signal already carried so that nothing
+    already on the exception is destroyed. That aggregate is synthetic: it summarises
+    errors raised elsewhere and so carries no traceback of its own."""
 
     def __init__(self, *sinks: AuditSink) -> None:
         self._sinks = sinks
 
     def write(self, record: AuditRecord) -> None:
-        errors = []
+        errors: list[Exception] = []
         terminating: BaseException | None = None
         for sink in self._sinks:
             try:
                 sink.write(record)
             except Exception as err:  # noqa: BLE001 - fan-out must attempt every sink before failing
                 errors.append(err)
-            except BaseException as err:
-                if terminating is None:
-                    terminating = err
+            except (KeyboardInterrupt, SystemExit) as err:
+                if terminating is not None:
+                    self._raise_terminating(terminating, errors)
+                terminating = err
         if terminating is not None:
-            if errors:
-                raise terminating from RuntimeError(
-                    f"{len(errors)} of {len(self._sinks)} audit sink(s) failed: {errors}"
-                )
-            raise terminating
+            self._raise_terminating(terminating, errors)
         if errors:
-            raise RuntimeError(f"{len(errors)} of {len(self._sinks)} audit sink(s) failed: {errors}")
+            raise self._aggregate(errors)
+
+    def _raise_terminating(self, terminating: BaseException, errors: list[Exception]) -> NoReturn:
+        if errors:
+            aggregate = self._aggregate(errors)
+            aggregate.__cause__ = terminating.__cause__
+            terminating.__cause__ = aggregate
+        raise terminating
+
+    def _aggregate(self, errors: list[Exception]) -> RuntimeError:
+        return RuntimeError(f"{len(errors)} of {len(self._sinks)} audit sink(s) failed: {errors}")
 
 
 def build_record(
