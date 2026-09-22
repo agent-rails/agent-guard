@@ -25,15 +25,15 @@ class AuditRecord:
     `executed` means the guard released the call — NOT that the tool completed.
     The guard is an authorization boundary, not a tool runtime: in the MCP proxy
     (`agent_guard.mcp`) the record is written when the allowed `tools/call` is
-    forwarded to the server, and the proxy never learns the outcome, so completion
-    is structurally unknowable there. `cli check` is the mirror case — it records
+    released for forwarding to the server, and the proxy never learns the outcome, so
+    completion is structurally unknowable there. `cli check` is the mirror case — it records
     `executed=False` because it never releases the call; the caller acts on the
     exit code instead.
 
     `error` carries the failure detail when a released call did not return cleanly.
-    A call terminated by a `BaseException` (KeyboardInterrupt, SystemExit) is still
-    recorded with `executed=True` and a typed error saying the side-effect outcome
-    is unknown."""
+    A call terminated by a `BaseException` (for example `KeyboardInterrupt` or
+    `SystemExit`) is still recorded with `executed=True` and a typed error saying the
+    side-effect outcome is unknown."""
 
     ts: str
     agent_id: str
@@ -166,18 +166,37 @@ class SigningAuditSink:
 class MultiAuditSink:
     """Fan-out to several sinks (e.g. local JSONL + remote SIEM). Attempts every sink
     even if one fails, so durable local audit survives a flaky remote, then raises an
-    aggregate if any sink failed — never a silent drop."""
+    aggregate if any sink failed — never a silent drop.
+
+    A `BaseException` from one sink (a `KeyboardInterrupt` landing inside
+    `WebhookAuditSink`'s blocking POST is the realistic case) does not abort the
+    fan-out either: the remaining sinks are still attempted, so the durable local
+    sink still gets the record. It is NOT collected into the ordinary-error
+    aggregate — wrapping a terminating signal in a `RuntimeError` would swallow it.
+    The first such signal is re-raised once every sink has had its attempt, with any
+    ordinary sink errors chained as `__cause__`. If several sinks raise a
+    `BaseException`, the first one wins and the later ones are dropped."""
 
     def __init__(self, *sinks: AuditSink) -> None:
         self._sinks = sinks
 
     def write(self, record: AuditRecord) -> None:
         errors = []
+        terminating: BaseException | None = None
         for sink in self._sinks:
             try:
                 sink.write(record)
             except Exception as err:  # noqa: BLE001 - fan-out must attempt every sink before failing
                 errors.append(err)
+            except BaseException as err:
+                if terminating is None:
+                    terminating = err
+        if terminating is not None:
+            if errors:
+                raise terminating from RuntimeError(
+                    f"{len(errors)} of {len(self._sinks)} audit sink(s) failed: {errors}"
+                )
+            raise terminating
         if errors:
             raise RuntimeError(f"{len(errors)} of {len(self._sinks)} audit sink(s) failed: {errors}")
 

@@ -56,6 +56,46 @@ def test_multi_attempts_all_then_raises():
     assert len(local.records) == 1  # durable local audit survived the remote failure
 
 
+@pytest.mark.parametrize(
+    "sink_error",
+    [KeyboardInterrupt(), SystemExit(77)],
+    ids=["keyboard-interrupt", "system-exit"],
+)
+def test_multi_attempts_every_sink_after_a_base_exception(sink_error):
+    """A Ctrl-C landing inside a remote sink's blocking POST must not skip the durable
+    local sink queued behind it — that sink is the whole reason for the fan-out."""
+
+    class InterruptingSink:
+        def write(self, record):
+            raise sink_error
+
+    local = MemoryAuditSink()
+    with pytest.raises(type(sink_error)) as excinfo:
+        MultiAuditSink(InterruptingSink(), local).write(a_record())
+    assert excinfo.value is sink_error
+    assert len(local.records) == 1
+
+
+def test_multi_reraises_the_signal_and_chains_ordinary_sink_errors():
+    """A terminating signal is re-raised as itself, never folded into the RuntimeError
+    aggregate, but an ordinary sink failure in the same fan-out is still reported."""
+
+    class InterruptingSink:
+        def write(self, record):
+            raise KeyboardInterrupt
+
+    class FailingSink:
+        def write(self, record):
+            raise RuntimeError("remote down")
+
+    local = MemoryAuditSink()
+    with pytest.raises(KeyboardInterrupt) as excinfo:
+        MultiAuditSink(InterruptingSink(), FailingSink(), local).write(a_record())
+    assert len(local.records) == 1
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert "remote down" in str(excinfo.value.__cause__)
+
+
 def test_signing_sink_requires_a_secret():
     with pytest.raises(ValueError):
         SigningAuditSink(MemoryAuditSink(), secret=b"")

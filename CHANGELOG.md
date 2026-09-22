@@ -6,16 +6,40 @@ Notable changes. This project follows [Semantic Versioning](https://semver.org).
 
 ### Fixed
 
-- Audit: a tool call terminated by a `BaseException` — `KeyboardInterrupt` (Ctrl-C) or
-  `SystemExit` — left no audit record at all, even though the guard had already released
-  the call and the tool's side effects may have landed. `Guard.call` and the `@guarded`
-  decorator caught only `Exception`, so these passed straight through the audit path.
-  Both now record `executed=True` with a typed error noting that dispatch did not return
-  and the side-effect outcome is unknown, then re-raise the original exception unchanged.
-  `Guard.wrap` inherits the fix via `Guard.call`. If the audit sink itself fails on this
-  path, the original `BaseException` still propagates with the sink error chained as
-  `__cause__` — the terminating signal is never replaced by an audit error. Not breaking:
-  no schema change, and the existing `Exception` handling is untouched.
+- Audit: a tool call terminated by a `BaseException` (for example `KeyboardInterrupt`
+  from Ctrl-C, or `SystemExit`) left no audit record at all, even though the guard had
+  already released the call and the tool's side effects may have landed. `Guard.call`
+  and the `@guarded` decorator caught only `Exception`, so these passed straight through
+  the audit path. Both now record `executed=True` with a typed error noting that dispatch
+  did not return and the side-effect outcome is unknown, then re-raise the original
+  exception unchanged. `Guard.wrap` inherits the fix via `Guard.call`. If the audit sink
+  itself fails on this path — with an ordinary `Exception` *or* with a `BaseException` of
+  its own — the original terminating exception instance still propagates, with the sink
+  error chained as `__cause__`; on this path the terminating signal is never replaced by
+  an audit error, so a sink raising `SystemExit(1)` can no longer mask a dispatch's
+  `SystemExit(3)` or turn a Ctrl-C into an ordinary-looking exit. Not breaking: no schema
+  change, and the existing `Exception` handling on the dispatch path is untouched.
+- Audit: `MultiAuditSink.write` caught only `Exception`, so a `BaseException` from one
+  sink aborted the fan-out and every sink queued behind it was skipped — including the
+  durable local sink that exists precisely to survive a flaky remote, falsifying the
+  class's own "attempts every sink" contract. The realistic trigger is the same Ctrl-C:
+  one landing inside `WebhookAuditSink`'s blocking POST lost the record entirely. Every
+  sink is now attempted; a terminating signal is re-raised as itself once the fan-out
+  completes rather than being folded into the `RuntimeError` aggregate (which would
+  swallow it), with any ordinary sink errors from the same fan-out chained as `__cause__`.
+  Ordinary-`Exception` aggregation behaviour is unchanged.
+- Tradeoff: a Ctrl-C mid-dispatch now blocks behind a synchronous audit write before
+  propagating, where it was previously instant. Measured ~1.2s with two stubbed sinks;
+  worst case is `n_sinks * 5s` with `WebhookAuditSink`'s default `timeout=5.0` and
+  `MultiAuditSink`'s serial fan-out. Durable audit of a possibly-applied side effect is
+  the point of the fix, so this is a deliberate exchange, not a regression — but an
+  operator expecting Ctrl-C to return the prompt immediately will notice it.
+- Reach in the default configuration: under `agentguard run` *without* `--audit`, the
+  sink is a `MemoryAuditSink` and the `--show-audit` dump sits after the `try/finally`,
+  so a `BaseException` propagates past it and the new record is written and then
+  discarded with the process. Only `--audit <file>` (a `JsonlAuditSink`) actually
+  persists it. The fix is real for embedded/library use and for `--audit`; it changes
+  nothing observable in the bare `agentguard run` default.
 
 ## [0.2.0] - 2026-08-06
 

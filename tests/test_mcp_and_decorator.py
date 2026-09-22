@@ -117,24 +117,46 @@ def test_decorator_audits_keyboard_interrupt():
     assert len(audit.records) == 1
     assert audit.records[-1].executed is True
     assert audit.records[-1].decision == "allow"
-    assert audit.records[-1].error.startswith("KeyboardInterrupt:")
+    assert audit.records[-1].error == "KeyboardInterrupt: dispatch did not return; side-effect outcome unknown"
 
 
-def test_decorator_base_exception_survives_a_failing_audit_sink():
+@pytest.mark.parametrize(
+    "sink_error",
+    [RuntimeError("sink unreachable"), KeyboardInterrupt(), SystemExit(77)],
+    ids=["exception", "keyboard-interrupt", "system-exit"],
+)
+def test_decorator_base_exception_survives_a_failing_audit_sink(sink_error):
     class FailingSink:
         def write(self, record):
-            raise RuntimeError("sink unreachable")
+            raise sink_error
 
     guard = a_guard(FailingSink())
+    original = KeyboardInterrupt()
 
     @guarded(guard)
     def interrupted_tool():
-        raise KeyboardInterrupt
+        raise original
 
     with pytest.raises(KeyboardInterrupt) as excinfo:
         interrupted_tool()
-    assert isinstance(excinfo.value.__cause__, RuntimeError)
-    assert str(excinfo.value.__cause__) == "sink unreachable"
+    assert excinfo.value is original
+    assert excinfo.value.__cause__ is sink_error
+
+
+def test_decorator_failing_sink_does_not_corrupt_the_system_exit_code():
+    class ExitingSink:
+        def write(self, record):
+            raise SystemExit(1)
+
+    guard = a_guard(ExitingSink())
+
+    @guarded(guard)
+    def exiting_tool():
+        raise SystemExit(3)
+
+    with pytest.raises(SystemExit) as excinfo:
+        exiting_tool()
+    assert excinfo.value.code == 3
 
 
 def test_decorator_uses_function_name_by_default():
