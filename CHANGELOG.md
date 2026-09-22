@@ -4,6 +4,19 @@ Notable changes. This project follows [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+### Fixed
+
+- Audit: a tool call terminated by a `BaseException` — `KeyboardInterrupt` (Ctrl-C) or
+  `SystemExit` — left no audit record at all, even though the guard had already released
+  the call and the tool's side effects may have landed. `Guard.call` and the `@guarded`
+  decorator caught only `Exception`, so these passed straight through the audit path.
+  Both now record `executed=True` with a typed error noting that dispatch did not return
+  and the side-effect outcome is unknown, then re-raise the original exception unchanged.
+  `Guard.wrap` inherits the fix via `Guard.call`. If the audit sink itself fails on this
+  path, the original `BaseException` still propagates with the sink error chained as
+  `__cause__` — the terminating signal is never replaced by an audit error. Not breaking:
+  no schema change, and the existing `Exception` handling is untouched.
+
 ## [0.2.0] - 2026-08-06
 
 - **Breaking**: `arg_patterns` regex matching (`Policy`/`Rule`) now runs on RE2 (`google-re2`), not stdlib `re`. A policy-author-written pattern matched against attacker-controlled content could be forced into catastrophic backtracking by a small crafted payload -- a plausible pattern (`(\w+)+\d`) hung the process 5+ seconds on 31 bytes with no protection. RE2 guarantees linear-time matching by construction, eliminating that vulnerability class rather than mitigating it. Cost: RE2's syntax has no backreferences or lookaround (a pattern using either now fails to load with a clear error, not silently); the core package is no longer zero-dependency; Python floor moved from 3.9 to 3.10 (no `google-re2` wheel for 3.9). No shipped policy used either construct.

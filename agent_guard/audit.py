@@ -20,6 +20,21 @@ Poster = Callable[[str, bytes, dict, float], None]
 
 @dataclass(frozen=True)
 class AuditRecord:
+    """One decision, and whether the guard released the call to the tool.
+
+    `executed` means the guard released the call — NOT that the tool completed.
+    The guard is an authorization boundary, not a tool runtime: in the MCP proxy
+    (`agent_guard.mcp`) the record is written when the allowed `tools/call` is
+    forwarded to the server, and the proxy never learns the outcome, so completion
+    is structurally unknowable there. `cli check` is the mirror case — it records
+    `executed=False` because it never releases the call; the caller acts on the
+    exit code instead.
+
+    `error` carries the failure detail when a released call did not return cleanly.
+    A call terminated by a `BaseException` (KeyboardInterrupt, SystemExit) is still
+    recorded with `executed=True` and a typed error saying the side-effect outcome
+    is unknown."""
+
     ts: str
     agent_id: str
     tool: str

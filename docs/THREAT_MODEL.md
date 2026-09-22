@@ -63,6 +63,8 @@ What agent-guard defends against, per pillar, framed as Prevent / Contain / Dete
 
 **Detect:** a signed record's integrity is independently verifiable via `verify_record`.
 
+**Detect:** a released call terminated by a `BaseException` (`KeyboardInterrupt`, `SystemExit`) is still recorded, with `executed=True` and a typed `error` stating that dispatch did not return and the side-effect outcome is unknown. A Ctrl-C landing mid-dispatch previously left no record at all despite the tool having already run — that record loss is closed. The record asserts the call was released, not that it completed; an operator must treat the side effect as possibly-applied.
+
 **Explicit non-goals (stated in the sink's own docstring):**
 - Does **not** defend against a compromised producer — the process signing records also holds the secret, so it can sign a forged record just as validly as a real one.
 - Does **not** detect suppression — a producer that simply never emits a record for an action leaves no gap to find.

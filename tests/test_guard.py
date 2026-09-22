@@ -77,6 +77,66 @@ def test_allowed_dispatch_failure_is_audited():
     assert audit.records[-1].error == "dispatch failed"
 
 
+def test_keyboard_interrupt_during_dispatch_is_audited():
+    guard, audit = make_guard()
+
+    def interrupted_dispatch(tool: str, args: dict) -> str:
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        guard.call(interrupted_dispatch, "sql", {"query": "SELECT 1"})
+    assert len(audit.records) == 1
+    assert audit.records[-1].executed is True
+    assert audit.records[-1].decision == "allow"
+    assert audit.records[-1].error.startswith("KeyboardInterrupt:")
+
+
+def test_system_exit_during_dispatch_is_audited():
+    guard, audit = make_guard()
+
+    def exiting_dispatch(tool: str, args: dict) -> str:
+        raise SystemExit(0)
+
+    with pytest.raises(SystemExit):
+        guard.call(exiting_dispatch, "sql", {"query": "SELECT 1"})
+    assert len(audit.records) == 1
+    assert audit.records[-1].executed is True
+    assert audit.records[-1].error.startswith("SystemExit:")
+
+
+def test_base_exception_survives_a_failing_audit_sink():
+    """A sink that raises must not replace the terminating BaseException with its own
+    error: swapping KeyboardInterrupt for RuntimeError would destroy the termination
+    signal. The sink failure is chained as __cause__, never swallowed."""
+
+    class FailingSink:
+        def write(self, record):
+            raise RuntimeError("sink unreachable")
+
+    guard = Guard(make_policy(), audit=FailingSink(), agent_id="agent-test")
+
+    def interrupted_dispatch(tool: str, args: dict) -> str:
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt) as excinfo:
+        guard.call(interrupted_dispatch, "sql", {"query": "SELECT 1"})
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert str(excinfo.value.__cause__) == "sink unreachable"
+
+
+def test_wrap_inherits_base_exception_auditing():
+    guard, audit = make_guard()
+
+    def interrupted_dispatch(tool: str, args: dict) -> str:
+        raise KeyboardInterrupt
+
+    wrapped = guard.wrap(interrupted_dispatch)
+    with pytest.raises(KeyboardInterrupt):
+        wrapped("sql", {"query": "SELECT 1"})
+    assert len(audit.records) == 1
+    assert audit.records[-1].error.startswith("KeyboardInterrupt:")
+
+
 def test_deny_blocks_and_does_not_execute():
     guard, audit = make_guard()
     with pytest.raises(BlockedError):

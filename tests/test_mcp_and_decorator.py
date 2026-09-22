@@ -103,6 +103,40 @@ def test_decorator_audits_allowed_tool_failure():
     assert audit.records[-1].error == "tool failed"
 
 
+def test_decorator_audits_keyboard_interrupt():
+    audit = MemoryAuditSink()
+    guard = a_guard(audit)
+
+    @guarded(guard)
+    def interrupted_tool():
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        interrupted_tool()
+
+    assert len(audit.records) == 1
+    assert audit.records[-1].executed is True
+    assert audit.records[-1].decision == "allow"
+    assert audit.records[-1].error.startswith("KeyboardInterrupt:")
+
+
+def test_decorator_base_exception_survives_a_failing_audit_sink():
+    class FailingSink:
+        def write(self, record):
+            raise RuntimeError("sink unreachable")
+
+    guard = a_guard(FailingSink())
+
+    @guarded(guard)
+    def interrupted_tool():
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt) as excinfo:
+        interrupted_tool()
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert str(excinfo.value.__cause__) == "sink unreachable"
+
+
 def test_decorator_uses_function_name_by_default():
     guard = a_guard()
 
