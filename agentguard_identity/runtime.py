@@ -91,12 +91,11 @@ def _run(argv: list[str]) -> str:
     stderr, and so this matches what `agent_guard.cli._shell` raises -- one CLI
     handler then covers both the container and the local backend.
 
-    Used at spawn too, so a spawn failure raises this type as well. Note the
-    tradeoff: `.stderr` still carries the engine's own diagnostic, but
-    `CalledProcessError.__str__` does not include it, and nothing catches a spawn
-    failure -- so an unhandled spawn traceback now names the exit status without
-    the engine's message. Dispatch failures are unaffected: `agent_guard.cli._run`
-    prints `.stdout`/`.stderr` before exiting.
+    Used at spawn too, so a spawn failure raises this type as well. Callers must
+    print `.stderr` themselves: `CalledProcessError.__str__` names only the command
+    and the exit status, so the engine's own diagnostic ("pull access denied for
+    ...") is on the exception but not in its message. `agent_guard.cli._run` does
+    this for both the spawn and the dispatch path.
     """
     result = subprocess.run(argv, capture_output=True, text=True, check=True)
     return result.stdout.strip()

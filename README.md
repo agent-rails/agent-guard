@@ -334,7 +334,7 @@ guard run --policy policy.example.yaml --audit run.jsonl -- ./do-thing.sh
 | Exit | Meaning |
 |---|---|
 | `0` | the command ran and exited 0 |
-| `1` | usage error (no command given) |
+| `1` | usage error (no command given), or the sandbox failed to spawn |
 | `2` | refused — the runtime's code digest is not allowlisted |
 | `3` | blocked by policy |
 | `N` | the command's own non-zero exit status |

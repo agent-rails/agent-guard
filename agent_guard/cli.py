@@ -146,7 +146,7 @@ def _run(args) -> int:
 
     Exit codes:
       0       the command ran and exited 0
-      1       usage error
+      1       usage error, or the sandbox failed to spawn
       2       refused (attestation not allowlisted)
       3       blocked by policy
       N       the command's own non-zero exit status
@@ -162,7 +162,11 @@ def _run(args) -> int:
     code. Both backends raise that one type -- `_shell` via `check=True`, and
     `ContainerSandbox.dispatch` via `agentguard_identity.runtime._run`.
     """
-    sandbox, attestation = _build_sandbox(args)
+    try:
+        sandbox, attestation = _build_sandbox(args)
+    except subprocess.CalledProcessError as err:
+        print(f"sandbox spawn failed: {(err.stderr or '').strip() or err}", file=sys.stderr)
+        return 1
 
     allowlist = set(args.allow_digest)
     if args.dev_trust_runtime:

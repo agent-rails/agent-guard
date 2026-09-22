@@ -59,3 +59,19 @@ def test_container_dispatch_nonzero_exit_raises_called_process_error():
         assert caught.value.returncode == 42
     finally:
         sandbox.close()
+
+
+def test_spawn_failure_prints_engine_diagnostic_and_is_not_a_traceback(capsys):
+    """`_run` raising CalledProcessError instead of a hand-rolled RuntimeError put
+    the engine's own message on `.stderr` but out of `str(err)`, so an unhandled
+    spawn traceback would have named only the exit status. The CLI prints
+    `.stderr`, keeping the one line that tells an operator they typo'd the image."""
+    from agent_guard.cli import main
+
+    code = main(["run", "--runtime", "container", "--image", "agentguard-no-such-image:nope", "--", "echo", "hi"])
+    assert code == 1
+
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    assert "sandbox spawn failed:" in err
+    assert "agentguard-no-such-image" in err
