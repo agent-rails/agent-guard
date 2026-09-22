@@ -329,6 +329,19 @@ guard run --dev-trust-runtime -- git push --force      # gated: prompts a human
 guard run --policy policy.example.yaml --audit run.jsonl -- ./do-thing.sh
 ```
 
+`guard run` is a wrapper, so it is transparent about the command's own result — the command's exit status propagates, and a signal maps to `128 + N` the way a shell reports it:
+
+| Exit | Meaning |
+|---|---|
+| `0` | the command ran and exited 0 |
+| `1` | usage error (no command given) |
+| `2` | refused — the runtime's code digest is not allowlisted |
+| `3` | blocked by policy |
+| `N` | the command's own non-zero exit status |
+| `128+N` | the command died on signal `N` (`137` for SIGKILL) |
+
+**`2` and `3` are ambiguous.** A command that itself exits `2` or `3` is indistinguishable, by exit code alone, from a refusal or a policy block. Scripts that need the distinction should read the audit record (`--audit`), where a blocked call is `executed: false` with the matching `rule_id`, and a released-then-failed call is `executed: true` with a non-null `error`. Moving `guard`'s own codes into a reserved high band would resolve this, but it is a breaking change to a documented CLI contract and is tracked separately in #47.
+
 Two backends behind one interface:
 - `--runtime local` (default) — in-process, runs on any laptop, zero cloud. The dev wedge.
 - `--runtime container --image <img>` — real isolation via Docker/Podman (`--network none` by default). Fails loud if no engine is installed — no silent fallback.

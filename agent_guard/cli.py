@@ -22,9 +22,18 @@ from agentguard_identity import Broker, ContainerRuntime, LocalAttestor, LocalRu
 
 
 def _shell(tool: str, args: dict) -> str:
+    """Run a shell command and return its merged output.
+
+    `check=True` so a non-zero exit or a signal death raises
+    `subprocess.CalledProcessError` instead of returning quietly. `Guard.call`
+    records `error=str(err)` for a raising dispatch, so the failure lands in the
+    audit record and an exit status ("returned non-zero exit status 42") reads
+    differently from a signal ("died with <Signals.SIGKILL: 9>"). Without it the
+    record says `executed=true, error=null` for a command that failed.
+    """
     if tool not in {"shell", "exec"}:
         raise ValueError(f"unsupported tool '{tool}'")
-    result = subprocess.run(args["cmd"], shell=True, capture_output=True, text=True)
+    result = subprocess.run(args["cmd"], shell=True, capture_output=True, text=True, check=True)
     return (result.stdout + result.stderr).strip()
 
 
@@ -133,6 +142,26 @@ def _build_sandbox(args):
 
 
 def _run(args) -> int:
+    """Spawn a sandbox, mint a scoped identity, run one command through the guard.
+
+    Exit codes:
+      0       the command ran and exited 0
+      1       usage error
+      2       refused (attestation not allowlisted)
+      3       blocked by policy
+      N       the command's own non-zero exit status
+      128+N   the command died on signal N (137 for SIGKILL, shell convention)
+
+    2 and 3 are ambiguous once child statuses propagate -- a command that itself
+    exits 2 or 3 is indistinguishable from a refusal or a block. Scripts that need
+    the distinction should read the audit record (`--audit`), where a blocked call
+    is `executed=false`, not the exit code.
+
+    `subprocess.CalledProcessError` is caught specifically, not `Exception`: a
+    guard-internal bug must keep tracebacking rather than turn into a silent exit
+    code. Both backends raise that one type -- `_shell` via `check=True`, and
+    `ContainerSandbox.dispatch` via `agentguard_identity.runtime._run`.
+    """
     sandbox, attestation = _build_sandbox(args)
 
     allowlist = set(args.allow_digest)
@@ -167,6 +196,11 @@ def _run(args) -> int:
     except BlockedError as err:
         print(f"blocked: {err}", file=sys.stderr)
         exit_code = 3
+    except subprocess.CalledProcessError as err:
+        output = ((err.stdout or "") + (err.stderr or "")).strip()
+        if output:
+            print(output)
+        exit_code = 128 - err.returncode if err.returncode < 0 else err.returncode
     finally:
         sandbox.close()
 

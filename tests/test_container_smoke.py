@@ -49,3 +49,13 @@ def test_container_identity_mints_local_container_tier():
         assert token.sandbox_id == attestation.sandbox_id
     finally:
         sandbox.close()
+
+
+def test_container_dispatch_nonzero_exit_raises_called_process_error():
+    sandbox = ContainerRuntime().spawn(RuntimeSpec(kind="local.container", image=IMAGE))
+    try:
+        with pytest.raises(subprocess.CalledProcessError) as caught:
+            sandbox.dispatch("shell", {"cmd": "exit 42"})
+        assert caught.value.returncode == 42
+    finally:
+        sandbox.close()

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+
 import pytest
 
 from agent_guard.cli import main
@@ -336,3 +338,100 @@ def test_starter_policy_matches_example_file():
 
     example = Path(__file__).resolve().parent.parent / "policy.example.yaml"
     assert yaml.safe_load(example.read_text(encoding="utf-8")) == _STARTER_POLICY
+
+
+def _records(path):
+    import json
+
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def _call_shell(cmd: str, audit_path):
+    from agent_guard import Guard, JsonlAuditSink, Policy
+    from agent_guard.cli import _shell
+
+    guard = Guard(
+        Policy.from_dict({"default": "allow", "rules": []}),
+        audit=JsonlAuditSink(str(audit_path)),
+        agent_id="rc",
+    )
+    return guard.call(_shell, "shell", {"cmd": cmd})
+
+
+def test_shell_nonzero_exit_records_the_failure(tmp_path):
+    """#46: `_shell` discarded `returncode`, so a command that exited 42 was
+    recorded `executed=true, error=null` -- a failure reading as a success on the
+    default `guard run` path."""
+    audit = tmp_path / "rc.jsonl"
+    with pytest.raises(subprocess.CalledProcessError) as caught:
+        _call_shell("exit 42", audit)
+    assert caught.value.returncode == 42
+
+    record = _records(audit)[0]
+    assert record["executed"] is True
+    assert "exit status 42" in record["error"]
+
+
+def test_shell_signal_kill_records_the_signal(tmp_path):
+    audit = tmp_path / "rc.jsonl"
+    with pytest.raises(subprocess.CalledProcessError):
+        _call_shell("kill -9 $$", audit)
+
+    record = _records(audit)[0]
+    assert record["executed"] is True
+    assert "SIGKILL" in record["error"]
+
+
+def test_shell_exit_status_and_signal_are_distinguishable_in_the_audit_trail(tmp_path):
+    """The issue's core complaint: a clean exit, a non-zero exit and a signal kill
+    were all the same record. Pin that the three now read differently."""
+    clean = tmp_path / "clean.jsonl"
+    failed = tmp_path / "failed.jsonl"
+    killed = tmp_path / "killed.jsonl"
+
+    _call_shell("true", clean)
+    with pytest.raises(subprocess.CalledProcessError):
+        _call_shell("exit 42", failed)
+    with pytest.raises(subprocess.CalledProcessError):
+        _call_shell("kill -9 $$", killed)
+
+    assert _records(clean)[0]["error"] is None
+    assert "exit status 42" in _records(failed)[0]["error"]
+    assert "SIGKILL" in _records(killed)[0]["error"]
+    assert _records(failed)[0]["error"] != _records(killed)[0]["error"]
+
+
+def test_run_propagates_child_exit_code_and_still_prints_output(capsys):
+    """`guard run` is a wrapper; `guard run -- make test` exiting 0 on a failing
+    test suite makes it unusable in CI. Output must survive the propagation."""
+    code = main(["run", "--dev-trust-runtime", "--", "echo", "partial-output;", "exit", "42"])
+    assert code == 42
+    assert "partial-output" in capsys.readouterr().out
+
+
+def test_run_maps_signal_to_128_plus_n(capsys):
+    code = main(["run", "--dev-trust-runtime", "--", "kill", "-9", "$$"])
+    assert code == 137
+
+
+def test_run_failing_command_is_not_a_traceback(capsys):
+    """Mirrors test_check_non_object_json_payload_fails_closed_not_a_traceback:
+    a failing tool is an ordinary outcome, not an unhandled exception at the
+    operator."""
+    code = main(["run", "--dev-trust-runtime", "--", "exit", "42"])
+    assert code == 42
+    assert "Traceback" not in capsys.readouterr().err
+
+
+def test_run_blocked_still_returns_3_and_records_not_executed(tmp_path, capsys):
+    """Regression guard: exit 3 is now shared with a child that exits 3, so pin
+    that the blocked path still returns 3 AND still records `executed=false` --
+    the audit record, not the exit code, is what disambiguates."""
+    audit = tmp_path / "blocked.jsonl"
+    code = main(["run", "--dev-trust-runtime", "--audit", str(audit), "--", "rm", "-rf", "/tmp/x"])
+    assert code == 3
+    assert "blocked:" in capsys.readouterr().err
+
+    record = _records(audit)[0]
+    assert record["executed"] is False
+    assert record["error"] is None
