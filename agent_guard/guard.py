@@ -166,6 +166,18 @@ class Guard:
         except Exception as err:
             self.record(tool, args, verdict, executed=True, error=str(err))
             raise
+        except BaseException as err:
+            try:
+                self.record(
+                    tool,
+                    args,
+                    verdict,
+                    executed=True,
+                    error=f"{type(err).__name__}: dispatch did not return; side-effect outcome unknown",
+                )
+            except BaseException as audit_err:
+                raise err from audit_err
+            raise
         self.record(tool, args, verdict, executed=True)
         return result
 
@@ -227,6 +239,18 @@ def guarded(guard: Guard, tool_name: str | None = None) -> Callable:
                 result = fn(*args, **kwargs)
             except Exception as err:
                 guard.record(name, kwargs, verdict, executed=True, error=str(err))
+                raise
+            except BaseException as err:
+                try:
+                    guard.record(
+                        name,
+                        kwargs,
+                        verdict,
+                        executed=True,
+                        error=f"{type(err).__name__}: dispatch did not return; side-effect outcome unknown",
+                    )
+                except BaseException as audit_err:
+                    raise err from audit_err
                 raise
             guard.record(name, kwargs, verdict, executed=True)
             return result

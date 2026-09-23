@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import replace
 
@@ -54,6 +55,135 @@ def test_multi_attempts_all_then_raises():
     with pytest.raises(RuntimeError):
         MultiAuditSink(local, remote).write(a_record())
     assert len(local.records) == 1  # durable local audit survived the remote failure
+
+
+@pytest.mark.parametrize(
+    "sink_error",
+    [KeyboardInterrupt(), SystemExit(77)],
+    ids=["keyboard-interrupt", "system-exit"],
+)
+def test_multi_attempts_every_sink_after_a_base_exception(sink_error):
+    """A Ctrl-C landing inside a remote sink's blocking POST must not skip the durable
+    local sink queued behind it — that sink is the whole reason for the fan-out."""
+
+    class InterruptingSink:
+        def write(self, record):
+            raise sink_error
+
+    local = MemoryAuditSink()
+    with pytest.raises(type(sink_error)) as excinfo:
+        MultiAuditSink(InterruptingSink(), local).write(a_record())
+    assert excinfo.value is sink_error
+    assert len(local.records) == 1
+
+
+def test_multi_reraises_the_signal_and_chains_ordinary_sink_errors():
+    """A terminating signal is re-raised as itself, never folded into the RuntimeError
+    aggregate, but an ordinary sink failure in the same fan-out is still reported."""
+
+    class InterruptingSink:
+        def write(self, record):
+            raise KeyboardInterrupt
+
+    class FailingSink:
+        def write(self, record):
+            raise RuntimeError("remote down")
+
+    local = MemoryAuditSink()
+    with pytest.raises(KeyboardInterrupt) as excinfo:
+        MultiAuditSink(InterruptingSink(), FailingSink(), local).write(a_record())
+    assert len(local.records) == 1
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert "remote down" in str(excinfo.value.__cause__)
+
+
+def test_multi_second_operator_signal_aborts_the_fan_out():
+    """An operator pressing Ctrl-C again — precisely because the process did not die the
+    first time — must be obeyed, not swallowed for the rest of the fan-out."""
+
+    attempted = []
+
+    class InterruptingSink:
+        def __init__(self, name):
+            self.name = name
+
+        def write(self, record):
+            attempted.append(self.name)
+            raise KeyboardInterrupt(self.name)
+
+    late = MemoryAuditSink()
+    with pytest.raises(KeyboardInterrupt) as excinfo:
+        MultiAuditSink(InterruptingSink("first"), InterruptingSink("second"), late).write(a_record())
+    assert attempted == ["first", "second"]
+    assert str(excinfo.value) == "first"
+    assert len(late.records) == 0
+
+
+def test_multi_second_signal_cannot_replace_the_first():
+    """The second signal is the instruction to stop, not the exception to propagate:
+    a sink's SystemExit(1) must not overwrite the operator's KeyboardInterrupt."""
+
+    first = KeyboardInterrupt("operator ctrl-c")
+
+    class FirstSignalSink:
+        def write(self, record):
+            raise first
+
+    class ExitingSink:
+        def write(self, record):
+            raise SystemExit(1)
+
+    with pytest.raises(KeyboardInterrupt) as excinfo:
+        MultiAuditSink(FirstSignalSink(), ExitingSink(), MemoryAuditSink()).write(a_record())
+    assert excinfo.value is first
+    assert isinstance(excinfo.value.__context__, SystemExit)
+
+
+@pytest.mark.parametrize(
+    "sink_error",
+    [asyncio.CancelledError(), GeneratorExit()],
+    ids=["cancelled-error", "generator-exit"],
+)
+def test_multi_does_not_hold_cancellation_across_later_sinks(sink_error):
+    """Holding a CancelledError across a subsequent blocking sink write is how
+    cooperative cancellation and Task.cancel() timeouts break. These propagate at once."""
+
+    later = MemoryAuditSink()
+
+    class CancellingSink:
+        def write(self, record):
+            raise sink_error
+
+    with pytest.raises(type(sink_error)) as excinfo:
+        MultiAuditSink(CancellingSink(), later).write(a_record())
+    assert excinfo.value is sink_error
+    assert len(later.records) == 0
+
+
+def test_multi_preserves_a_pre_existing_cause_on_the_signal():
+    """Chaining the ordinary-error aggregate must not clobber a cause the terminating
+    signal already carried — the aggregate is nested above it, not written over it."""
+
+    pre_existing = OSError("the cause we care about")
+    signal = KeyboardInterrupt("operator ctrl-c")
+    signal.__cause__ = pre_existing
+
+    class SignallingSink:
+        def write(self, record):
+            raise signal
+
+    class FailingSink:
+        def write(self, record):
+            raise RuntimeError("remote down")
+
+    local = MemoryAuditSink()
+    with pytest.raises(KeyboardInterrupt) as excinfo:
+        MultiAuditSink(SignallingSink(), FailingSink(), local).write(a_record())
+    assert len(local.records) == 1
+    aggregate = excinfo.value.__cause__
+    assert isinstance(aggregate, RuntimeError)
+    assert "remote down" in str(aggregate)
+    assert aggregate.__cause__ is pre_existing
 
 
 def test_signing_sink_requires_a_secret():

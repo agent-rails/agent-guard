@@ -77,6 +77,92 @@ def test_allowed_dispatch_failure_is_audited():
     assert audit.records[-1].error == "dispatch failed"
 
 
+def test_keyboard_interrupt_during_dispatch_is_audited():
+    guard, audit = make_guard()
+
+    def interrupted_dispatch(tool: str, args: dict) -> str:
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        guard.call(interrupted_dispatch, "sql", {"query": "SELECT 1"})
+    assert len(audit.records) == 1
+    assert audit.records[-1].executed is True
+    assert audit.records[-1].decision == "allow"
+    assert audit.records[-1].error == "KeyboardInterrupt: dispatch did not return; side-effect outcome unknown"
+
+
+def test_system_exit_during_dispatch_is_audited():
+    guard, audit = make_guard()
+
+    def exiting_dispatch(tool: str, args: dict) -> str:
+        raise SystemExit(0)
+
+    with pytest.raises(SystemExit):
+        guard.call(exiting_dispatch, "sql", {"query": "SELECT 1"})
+    assert len(audit.records) == 1
+    assert audit.records[-1].executed is True
+    assert audit.records[-1].error == "SystemExit: dispatch did not return; side-effect outcome unknown"
+
+
+@pytest.mark.parametrize(
+    "sink_error",
+    [RuntimeError("sink unreachable"), KeyboardInterrupt(), SystemExit(77)],
+    ids=["exception", "keyboard-interrupt", "system-exit"],
+)
+def test_base_exception_survives_a_failing_audit_sink(sink_error):
+    """A sink that raises must not replace the terminating BaseException with its own
+    error: swapping KeyboardInterrupt for a sink-chosen SystemExit would destroy the
+    termination signal a shell reads. The sink failure is chained as __cause__, never
+    swallowed. Parameterized over a BaseException-raising sink specifically, because
+    that is the input the audit guard's own except clause has to be wide enough to catch."""
+
+    class FailingSink:
+        def write(self, record):
+            raise sink_error
+
+    guard = Guard(make_policy(), audit=FailingSink(), agent_id="agent-test")
+    original = KeyboardInterrupt()
+
+    def interrupted_dispatch(tool: str, args: dict) -> str:
+        raise original
+
+    with pytest.raises(KeyboardInterrupt) as excinfo:
+        guard.call(interrupted_dispatch, "sql", {"query": "SELECT 1"})
+    assert excinfo.value is original
+    assert excinfo.value.__cause__ is sink_error
+
+
+def test_failing_sink_does_not_corrupt_the_system_exit_code():
+    """The concrete harm of a too-narrow audit guard: the dispatch's exit code is
+    replaced by the sink's, so a shell reads the wrong status."""
+
+    class ExitingSink:
+        def write(self, record):
+            raise SystemExit(1)
+
+    guard = Guard(make_policy(), audit=ExitingSink(), agent_id="agent-test")
+
+    def exiting_dispatch(tool: str, args: dict) -> str:
+        raise SystemExit(3)
+
+    with pytest.raises(SystemExit) as excinfo:
+        guard.call(exiting_dispatch, "sql", {"query": "SELECT 1"})
+    assert excinfo.value.code == 3
+
+
+def test_wrap_inherits_base_exception_auditing():
+    guard, audit = make_guard()
+
+    def interrupted_dispatch(tool: str, args: dict) -> str:
+        raise KeyboardInterrupt
+
+    wrapped = guard.wrap(interrupted_dispatch)
+    with pytest.raises(KeyboardInterrupt):
+        wrapped("sql", {"query": "SELECT 1"})
+    assert len(audit.records) == 1
+    assert "side-effect outcome unknown" in audit.records[-1].error
+
+
 def test_deny_blocks_and_does_not_execute():
     guard, audit = make_guard()
     with pytest.raises(BlockedError):
