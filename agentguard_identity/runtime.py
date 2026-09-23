@@ -84,9 +84,20 @@ def _find_engine() -> str:
 
 
 def _run(argv: list[str]) -> str:
-    result = subprocess.run(argv, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(f"{' '.join(argv[:2])} failed: {result.stderr.strip()}")
+    """Run an engine command, returning stdout; raise on a non-zero exit.
+
+    Raises `subprocess.CalledProcessError` rather than a hand-rolled `RuntimeError`
+    so the exception names the exit status even when the command writes nothing to
+    stderr, and so this matches what `agent_guard.cli._shell` raises -- one CLI
+    handler then covers both the container and the local backend.
+
+    Used at spawn too, so a spawn failure raises this type as well. Callers must
+    print `.stderr` themselves: `CalledProcessError.__str__` names only the command
+    and the exit status, so the engine's own diagnostic ("pull access denied for
+    ...") is on the exception but not in its message. `agent_guard.cli._run` does
+    this for both the spawn and the dispatch path.
+    """
+    result = subprocess.run(argv, capture_output=True, text=True, check=True)
     return result.stdout.strip()
 
 

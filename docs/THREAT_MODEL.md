@@ -69,6 +69,18 @@ What agent-guard defends against, per pillar, framed as Prevent / Contain / Dete
 - Does **not** defend against a compromised producer — the process signing records also holds the secret, so it can sign a forged record just as validly as a real one.
 - Does **not** detect suppression — a producer that simply never emits a record for an action leaves no gap to find.
 
+### What a record attests about outcome
+
+`executed` attests **release**, never **completion**. The governing invariant:
+
+- A non-null `error` means the released call is known **not** to have succeeded.
+- A null `error` means **no failure was observed at this boundary** — not that the call succeeded.
+- Any boundary that *can* observe a failure **must** surface it as an exception, so the single `error` channel carries it. `Guard.call` records `error=str(err)` for any raising dispatch, so a tool function that observes a failure and returns quietly is the bug, not the record shape.
+
+This is why the shipped tool functions raise: `agent_guard.cli._shell` runs with `check=True` and `agentguard_identity.runtime._run` likewise, so a non-zero exit or a signal death reaches the record as a `subprocess.CalledProcessError` string — an exit status ("returned non-zero exit status 42") reads differently from a signal ("died with `<Signals.SIGKILL: 9>`"). There is no `exit_code` field: `_signable_body` covers every field, so adding one would invalidate verification of every previously signed record.
+
+**The one boundary that cannot honour this:** the MCP proxy records at *forward* time (`agent_guard/mcp.py`, immediately after `guard.decide`), because it hands the `tools/call` to the downstream server and never sees the result. For an MCP-produced record a null `error` means **unknown**, not "no failure was observed."
+
 ## Pillar 4 — Isolation (runtime tiers)
 
 **Prevent:** claiming an isolation tier stronger than what actually ran. `ContainerRuntime.spawn` raises rather than silently falling back to `runc` when `gVisor` was requested but unavailable — claiming isolation it didn't provide is treated as a bug, not a convenience.

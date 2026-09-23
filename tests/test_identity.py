@@ -253,3 +253,20 @@ def test_end_to_end_a_second_sandboxs_proof_cannot_use_the_first_sandboxs_token(
     policy = Policy.from_dict({"default": "allow", "rules": []})
     with pytest.raises(ValueError, match="pop_proof failed"):
         Guard.from_token(encoded, b"k", policy, audit=MemoryAuditSink(), pop_proof=forged_proof)
+
+
+def test_runtime_run_raises_called_process_error_naming_the_exit_status():
+    """`_run` observed `returncode` but discarded it into a `RuntimeError` whose
+    message was empty when the command wrote nothing to stderr ("docker exec
+    failed: "). `CalledProcessError` names the status and matches what
+    `agent_guard.cli._shell` raises, so one CLI handler covers both backends.
+    Engine-independent -- exercises `_run` directly, no container daemon."""
+    import subprocess
+
+    from agentguard_identity.runtime import _run
+
+    with pytest.raises(subprocess.CalledProcessError) as caught:
+        _run(["sh", "-c", "echo boom 1>&2; exit 42"])
+    assert caught.value.returncode == 42
+    assert "exit status 42" in str(caught.value)
+    assert "boom" in caught.value.stderr
