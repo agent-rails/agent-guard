@@ -340,7 +340,7 @@ guard run --policy policy.example.yaml --audit run.jsonl -- ./do-thing.sh
 | `N` | the command's own non-zero exit status |
 | `128+N` | the command died on signal `N` (`137` for SIGKILL) |
 
-**`2` and `3` are ambiguous.** A command that itself exits `2` or `3` is indistinguishable, by exit code alone, from a refusal or a policy block. Scripts that need the distinction should read the audit record (`--audit`), where a blocked call is `executed: false` with the matching `rule_id`, and a released-then-failed call is `executed: true` with a non-null `error`. Moving `guard`'s own codes into a reserved high band would resolve this, but it is a breaking change to a documented CLI contract and is tracked separately in #47.
+**`1`, `2` and `3` are ambiguous.** A command that itself exits `1`, `2` or `3` is indistinguishable, by exit code alone, from a usage error or spawn failure (`1`), a refusal (`2`), or a policy block (`3`). Scripts that need the distinction should read the audit record (`--audit`), where a blocked call is `executed: false` with the matching `rule_id`, and a released-then-failed call is `executed: true` with a non-null `error`. Moving `guard`'s own codes into a reserved high band would resolve this, but it is a breaking change to a documented CLI contract and is tracked separately in #47.
 
 Two backends behind one interface:
 - `--runtime local` (default) — in-process, runs on any laptop, zero cloud. The dev wedge.

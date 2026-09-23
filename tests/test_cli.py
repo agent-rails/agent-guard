@@ -409,7 +409,7 @@ def test_run_propagates_child_exit_code_and_still_prints_output(capsys):
     assert "partial-output" in capsys.readouterr().out
 
 
-def test_run_maps_signal_to_128_plus_n(capsys):
+def test_run_maps_signal_to_128_plus_n():
     code = main(["run", "--dev-trust-runtime", "--", "kill", "-9", "$$"])
     assert code == 137
 
