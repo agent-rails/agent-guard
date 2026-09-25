@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from agent_guard import (
+    ApprovalGrant,
     BlockedError,
     CallableJudge,
     Decision,
@@ -121,7 +122,13 @@ def test_judge_can_tighten_to_deny():
 def test_judge_allow_is_clamped_to_ceiling():
     audit = MemoryAuditSink()
     judge = CallableJudge(lambda req: (Decision.ALLOW, "looks fine"))
-    guard = Guard(judge_registry().compile(), audit=audit, agent_id="a", judge=judge, approver=lambda r: True)
+    guard = Guard(
+        judge_registry().compile(),
+        audit=audit,
+        agent_id="a",
+        judge=judge,
+        approver=lambda r: ApprovalGrant(r.call_id, r.call_digest),
+    )
     result = guard.call(raw_dispatch, "write", {"path": "/tmp/x"})
     assert result == "ran:write"
     assert audit.records[-1].decision == "require_human"

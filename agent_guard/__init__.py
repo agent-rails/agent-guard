@@ -8,11 +8,12 @@ from .audit import (
     SigningAuditSink,
     WebhookAuditSink,
     sign_record,
+    unresolved_releases,
     verify_record,
 )
 from .bundled import bundled_module, bundled_names, with_bundled
 from .decision import Decision, Verdict, clamp
-from .guard import ApprovalRequest, BlockedError, Guard, guarded
+from .guard import ApprovalGrant, ApprovalRequest, BlockedError, Guard, guarded
 from .judge import CallableJudge, Judge, JudgeRequest, LLMJudge, ReferenceJudge, build_prompt, parse_verdict
 from .mcp import handle_line as mcp_handle_line
 from .mcp import run_proxy as mcp_run_proxy
@@ -23,6 +24,7 @@ from .velocity import InMemoryVelocityLimiter, VelocityLimiter, VelocityRule
 
 __all__ = [
     "ApprovalRequest",
+    "ApprovalGrant",
     "AuditRecord",
     "AuditSink",
     "BlockedError",
@@ -59,6 +61,7 @@ __all__ = [
     "mcp_handle_line",
     "mcp_run_proxy",
     "sign_record",
+    "unresolved_releases",
     "verify_record",
     "with_bundled",
 ]

@@ -367,7 +367,7 @@ def test_shell_nonzero_exit_records_the_failure(tmp_path):
         _call_shell("exit 42", audit)
     assert caught.value.returncode == 42
 
-    record = _records(audit)[0]
+    record = _records(audit)[-1]
     assert record["executed"] is True
     assert "exit status 42" in record["error"]
 
@@ -377,7 +377,7 @@ def test_shell_signal_kill_records_the_signal(tmp_path):
     with pytest.raises(subprocess.CalledProcessError):
         _call_shell("kill -9 $$", audit)
 
-    record = _records(audit)[0]
+    record = _records(audit)[-1]
     assert record["executed"] is True
     assert "SIGKILL" in record["error"]
 
@@ -395,10 +395,10 @@ def test_shell_exit_status_and_signal_are_distinguishable_in_the_audit_trail(tmp
     with pytest.raises(subprocess.CalledProcessError):
         _call_shell("kill -9 $$", killed)
 
-    assert _records(clean)[0]["error"] is None
-    assert "exit status 42" in _records(failed)[0]["error"]
-    assert "SIGKILL" in _records(killed)[0]["error"]
-    assert _records(failed)[0]["error"] != _records(killed)[0]["error"]
+    assert _records(clean)[-1]["error"] is None
+    assert "exit status 42" in _records(failed)[-1]["error"]
+    assert "SIGKILL" in _records(killed)[-1]["error"]
+    assert _records(failed)[-1]["error"] != _records(killed)[-1]["error"]
 
 
 def test_run_propagates_child_exit_code_and_still_prints_output(capsys):

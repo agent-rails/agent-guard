@@ -66,7 +66,7 @@ runtime isolation are optional layers rather than implied defaults.
 | Policy decision | Ordered rules produce `allow`, `deny`, or `require_human`; every policy must declare its default |
 | Denied call | Never dispatched to the underlying tool |
 | Human gate | Fails closed when no approver is configured or approval is refused |
-| Audit | One structured record per decision through the configured sink |
+| Audit | Blocked calls are recorded; released calls get a pre-dispatch event and a terminal event |
 | Policy matching | RE2-backed matching over tool name, arguments, and optional trust tier |
 | LLM judge | Optional and ceiling-clamped; it can tighten a decision but cannot grant more authority than policy permits |
 | Velocity limit | Optional per-agent/per-tool sliding-window call-count limit |
@@ -178,12 +178,33 @@ python examples/demo.py
 
 Shows a benign query allowed, a `DROP TABLE` blocked, a `git push --force` gated to a human (denied here), and the audit trail for all four.
 
+## Approval and call outcomes
+
+For `Guard.call()` and the `guarded()` decorator, approval requests include a unique
+call ID and a SHA-256 digest binding the agent, trust tier, tool, exact arguments,
+and full policy verdict. The release event is written before dispatch; the terminal
+event records whether dispatch returned, raised, or ended with an unknown outcome. If a process
+dies after release, `unresolved_releases(records)` identifies the release with no
+terminal event. Audit-sink failure before release prevents dispatch.
+
+An approver must return an `ApprovalGrant` with the same call ID and digest;
+plain `True` values and stale grants fail closed.
+The grant binds a response to the request; the callback remains responsible for
+authenticating the human or approval service and returning a grant only after approval.
+
+This makes missing terminal evidence visible when the release event survives. It
+does not authenticate audit input, prove the producer emitted every event, or protect
+a whole log that was deleted or replaced. Verify signed records before reconciling
+them. MCP forwarding does not yet have terminal-result reporting,
+because the proxy does not observe the downstream tool's response. See the
+[threat model](docs/THREAT_MODEL.md) for these boundaries.
+
 ## Core model
 
 - Policy — an explicit `default` (required — no silent fallback) plus ordered `rules`. First matching rule wins.
 - Rule — `tools` (glob) + optional `arg_patterns` (regex over the rendered args) → a `decision`.
 - Guard — wraps a `dispatch(tool, args)`; evaluates, gates, executes, audits.
-- Audit — one structured record per decision. Sinks: `JsonlAuditSink` (local file), `WebhookAuditSink` (ship to a SIEM / collector — fail-loud, never drops), `CallableAuditSink` (any `emit` callable — OpenTelemetry / statsd / custom), `MultiAuditSink` (fan-out: durable local + remote), `SigningAuditSink` (wraps another sink, HMAC-signs each record so tampering by a party *without* the signing secret is detectable — does not defend against a compromised producer, which already holds the secret it signs with, nor does it detect a producer that simply never emits a record), `MemoryAuditSink` (tests), or your own `AuditSink`.
+- Audit — structured decision and call-lifecycle events. Sinks: `JsonlAuditSink` (local file), `WebhookAuditSink` (ship to a SIEM / collector — fail-loud, never drops), `CallableAuditSink` (any `emit` callable — OpenTelemetry / statsd / custom), `MultiAuditSink` (fan-out: durable local + remote), `SigningAuditSink` (wraps another sink, HMAC-signs each record so tampering by a party *without* the signing secret is detectable — does not defend against a compromised producer, which already holds the secret it signs with, nor does it detect a producer that simply never emits a record), `MemoryAuditSink` (tests), or your own `AuditSink`.
 
 ## Scaling policy — federated, layered, cached
 

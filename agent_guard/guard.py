@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import copy
 import fnmatch
 import functools
+import hashlib
+import json
+import uuid
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any
 
 from agentguard_identity.pop import PoPProof, verify_pop
@@ -17,7 +21,7 @@ from .tiers import TRUST_TIERS
 from .velocity import VelocityLimiter
 
 ToolDispatch = Callable[[str, dict], Any]
-HumanApprover = Callable[["ApprovalRequest"], bool]
+HumanApprover = Callable[["ApprovalRequest"], "ApprovalGrant | None"]
 
 
 class BlockedError(Exception):
@@ -27,16 +31,32 @@ class BlockedError(Exception):
         self.reason = reason
 
 
+@dataclass(frozen=True)
 class ApprovalRequest:
-    def __init__(self, agent_id: str, tool: str, args: dict[str, Any], reason: str) -> None:
-        self.agent_id = agent_id
-        self.tool = tool
-        self.args = args
-        self.reason = reason
+    """One approval prompt, bound to this exact call and its policy verdict."""
+
+    agent_id: str
+    tool: str
+    args: dict[str, Any]
+    reason: str
+    call_id: str
+    call_digest: str
+    rule_id: str | None
+    module: str | None
+    layer: int | None
+    trust_tier: str
 
 
-def deny_by_default(_: ApprovalRequest) -> bool:
-    return False
+@dataclass(frozen=True)
+class ApprovalGrant:
+    """Approval bound to one request; stale or cross-call grants are rejected."""
+
+    call_id: str
+    call_digest: str
+
+
+def deny_by_default(_: ApprovalRequest) -> ApprovalGrant | None:
+    return None
 
 
 class Guard:
@@ -132,53 +152,180 @@ class Guard:
         proceed — after policy+judge resolve to allow, and (for `require_human`) only after a
         human actually approves — so a denied or rejected call never consumes velocity budget.
         """
+        return self._decide(tool, args, uuid.uuid4().hex)[:2]
+
+    def _decide(
+        self,
+        tool: str,
+        args: dict[str, Any],
+        call_id: str,
+        before_approval: Callable[[Verdict, str], None] | None = None,
+    ) -> tuple[bool, Verdict, str]:
         if self._scopes is not None and not any(fnmatch.fnmatch(tool, scope) for scope in self._scopes):
-            return False, Verdict(
+            verdict = Verdict(
                 decision=Decision.DENY,
                 reason=f"tool '{tool}' is outside token scopes",
                 rule_id="token-scope",
             )
+            return False, verdict, _call_digest(self._agent_id, tool, args, verdict, self._trust_tier)
         verdict = self._policy.evaluate(tool, args, self._trust_tier)
         if verdict.needs_judge:
             verdict = self._consult_judge(verdict, tool, args)
+        digest = _call_digest(self._agent_id, tool, args, verdict, self._trust_tier)
         if verdict.decision is Decision.DENY:
-            return False, verdict
+            return False, verdict, digest
         if verdict.decision is Decision.REQUIRE_HUMAN:
-            approved = self._approver(ApprovalRequest(self._agent_id, tool, args, verdict.reason))
-            if not approved:
-                return False, verdict
-            return self._apply_velocity(tool, verdict)
-        return self._apply_velocity(tool, verdict)
+            if before_approval is not None:
+                before_approval(verdict, digest)
+            # The approver receives a detached copy. If it mutates what it displayed,
+            # reject the approval instead of dispatching arguments different from the
+            # approval request. The dispatch snapshot itself is never exposed here.
+            approval_args = copy.deepcopy(args)
+            request = ApprovalRequest(
+                self._agent_id,
+                tool,
+                approval_args,
+                verdict.reason,
+                call_id,
+                digest,
+                verdict.rule_id,
+                verdict.module,
+                verdict.layer,
+                self._trust_tier,
+            )
+            approval = self._approver(request)
+            if _call_digest(self._agent_id, tool, approval_args, verdict, self._trust_tier) != digest:
+                return False, replace(verdict, reason="approval request arguments changed; fail-closed to deny"), digest
+            if not isinstance(approval, ApprovalGrant) or approval.call_id != call_id or approval.call_digest != digest:
+                return False, verdict, digest
+            allowed, final_verdict = self._apply_velocity(tool, verdict)
+            if not allowed:
+                digest = _call_digest(self._agent_id, tool, args, final_verdict, self._trust_tier)
+            return allowed, final_verdict, digest
+        allowed, final_verdict = self._apply_velocity(tool, verdict)
+        if not allowed:
+            digest = _call_digest(self._agent_id, tool, args, final_verdict, self._trust_tier)
+        return allowed, final_verdict, digest
 
     def record(
-        self, tool: str, args: dict[str, Any], verdict: Verdict, executed: bool, error: str | None = None
+        self,
+        tool: str,
+        args: dict[str, Any],
+        verdict: Verdict,
+        executed: bool,
+        error: str | None = None,
+        *,
+        event: str | None = None,
+        call_id: str | None = None,
+        call_digest: str | None = None,
+        outcome: str | None = None,
     ) -> None:
-        self._audit.write(build_record(self._agent_id, tool, args, verdict, executed, error=error))
+        self._audit.write(
+            build_record(
+                self._agent_id,
+                tool,
+                args,
+                verdict,
+                executed,
+                error=error,
+                event=event,
+                call_id=call_id,
+                call_digest=call_digest,
+                outcome=outcome,
+            )
+        )
 
     def call(self, dispatch: ToolDispatch, tool: str, args: dict[str, Any]) -> Any:
-        allowed, verdict = self.decide(tool, args)
+        # Freeze the effective call at the boundary so a caller/approver cannot
+        # mutate arguments between authorization, approval and dispatch.
+        call_args = copy.deepcopy(args)
+        call_id = uuid.uuid4().hex
+        allowed, verdict, digest = self._decide(
+            tool,
+            call_args,
+            call_id,
+            before_approval=lambda approval_verdict, approval_digest: self.record(
+                tool,
+                copy.deepcopy(call_args),
+                approval_verdict,
+                executed=False,
+                event="decision",
+                call_id=call_id,
+                call_digest=approval_digest,
+                outcome="approval_requested",
+            ),
+        )
         if not allowed:
-            self.record(tool, args, verdict, executed=False)
+            self.record(
+                tool,
+                call_args,
+                verdict,
+                executed=False,
+                event="decision",
+                call_id=call_id,
+                call_digest=digest,
+                outcome="blocked",
+            )
             reason = verdict.reason if verdict.decision is Decision.DENY else f"human approval denied: {verdict.reason}"
             raise BlockedError(tool, reason)
+
+        # Persist the call intent before releasing it. If the process dies during
+        # dispatch, this durable event remains as an unresolved release.
+        self.record(
+            tool,
+            copy.deepcopy(call_args),
+            verdict,
+            executed=True,
+            event="release",
+            call_id=call_id,
+            call_digest=digest,
+            outcome="pending",
+        )
+        audit_args = copy.deepcopy(call_args)
         try:
-            result = dispatch(tool, args)
+            result = dispatch(tool, call_args)
         except Exception as err:
-            self.record(tool, args, verdict, executed=True, error=str(err))
+            try:
+                self.record(
+                    tool,
+                    audit_args,
+                    verdict,
+                    executed=True,
+                    error=str(err),
+                    event="terminal",
+                    call_id=call_id,
+                    call_digest=digest,
+                    outcome="raised",
+                )
+            except Exception as audit_err:
+                raise err from audit_err
             raise
         except BaseException as err:
             try:
                 self.record(
                     tool,
-                    args,
+                    audit_args,
                     verdict,
                     executed=True,
                     error=f"{type(err).__name__}: dispatch did not return; side-effect outcome unknown",
+                    event="terminal",
+                    call_id=call_id,
+                    call_digest=digest,
+                    outcome="unknown",
                 )
             except BaseException as audit_err:
                 raise err from audit_err
             raise
-        self.record(tool, args, verdict, executed=True)
+        self.record(
+            tool,
+            audit_args,
+            verdict,
+            executed=True,
+            event="terminal",
+            call_id=call_id,
+            call_digest=digest,
+            outcome="returned",
+        )
         return result
 
     def _apply_velocity(self, tool: str, verdict: Verdict) -> tuple[bool, Verdict]:
@@ -228,33 +375,30 @@ def guarded(guard: Guard, tool_name: str | None = None) -> Callable:
 
         @functools.wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            allowed, verdict = guard.decide(name, kwargs)
-            if not allowed:
-                guard.record(name, kwargs, verdict, executed=False)
-                reason = (
-                    verdict.reason if verdict.decision is Decision.DENY else f"human approval denied: {verdict.reason}"
-                )
-                raise BlockedError(name, reason)
-            try:
-                result = fn(*args, **kwargs)
-            except Exception as err:
-                guard.record(name, kwargs, verdict, executed=True, error=str(err))
-                raise
-            except BaseException as err:
-                try:
-                    guard.record(
-                        name,
-                        kwargs,
-                        verdict,
-                        executed=True,
-                        error=f"{type(err).__name__}: dispatch did not return; side-effect outcome unknown",
-                    )
-                except BaseException as audit_err:
-                    raise err from audit_err
-                raise
-            guard.record(name, kwargs, verdict, executed=True)
-            return result
+            return guard.call(lambda _tool, call_kwargs: fn(*args, **call_kwargs), name, kwargs)
 
         return wrapper
 
     return decorate
+
+
+def _call_digest(agent_id: str, tool: str, args: dict[str, Any], verdict: Verdict, trust_tier: str) -> str:
+    body = {
+        "agent_id": agent_id,
+        "tool": tool,
+        "args": args,
+        "trust_tier": trust_tier,
+        "verdict": {
+            "decision": verdict.decision.value,
+            "reason": verdict.reason,
+            "rule_id": verdict.rule_id,
+            "module": verdict.module,
+            "layer": verdict.layer,
+            "needs_judge": verdict.needs_judge,
+            "judge_ceiling": verdict.judge_ceiling.value,
+        },
+    }
+    canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode(
+        "utf-8"
+    )
+    return hashlib.sha256(canonical).hexdigest()

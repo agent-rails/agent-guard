@@ -4,6 +4,15 @@ Notable changes. This project follows [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+### Added
+
+- `Guard.call()` and `@guarded` now write a call-bound release event before dispatch and a terminal event afterward. Both share a call ID and SHA-256 digest over the agent, trust tier, tool, arguments, and policy verdict. `unresolved_releases()` identifies retained release events without a matching terminal event. MCP result reconciliation remains outside this change because the proxy does not observe downstream outcomes.
+- Lifecycle fields are optional and excluded from the signed body when absent, preserving verification of existing per-record HMACs.
+
+### Changed
+
+- **Breaking (0.x):** custom human approvers must return `ApprovalGrant(call_id, call_digest)` for the exact request; previous boolean callbacks now fail closed. `ApprovalRequest` exposes the call binding and verdict context.
+
 ### Fixed
 
 - Audit: a tool call terminated by a `BaseException` (for example `KeyboardInterrupt`
@@ -17,8 +26,10 @@ Notable changes. This project follows [Semantic Versioning](https://semver.org).
   its own — the original terminating exception instance still propagates, with the sink
   error chained as `__cause__`; on this path the terminating signal is never replaced by
   an audit error, so a sink raising `SystemExit(1)` can no longer mask a dispatch's
-  `SystemExit(3)` or turn a Ctrl-C into an ordinary-looking exit. Not breaking: no schema
-  change, and the existing `Exception` handling on the dispatch path is untouched.
+  `SystemExit(3)` or turn a Ctrl-C into an ordinary-looking exit. If a normal dispatch
+  exception and a terminal audit write both fail, the dispatch exception remains primary
+  and the audit failure is chained. Existing records without lifecycle fields keep their
+  original HMAC verification behavior.
 - Audit: `MultiAuditSink.write` caught only `Exception`, so a `BaseException` from one
   sink aborted the fan-out and every sink queued behind it was skipped — including the
   durable local sink that exists precisely to survive a flaky remote, falsifying the
