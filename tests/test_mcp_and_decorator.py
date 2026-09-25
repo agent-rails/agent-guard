@@ -114,7 +114,7 @@ def test_decorator_audits_keyboard_interrupt():
     with pytest.raises(KeyboardInterrupt):
         interrupted_tool()
 
-    assert len(audit.records) == 1
+    assert len(audit.records) == 2
     assert audit.records[-1].executed is True
     assert audit.records[-1].decision == "allow"
     assert audit.records[-1].error == "KeyboardInterrupt: dispatch did not return; side-effect outcome unknown"
@@ -127,8 +127,13 @@ def test_decorator_audits_keyboard_interrupt():
 )
 def test_decorator_base_exception_survives_a_failing_audit_sink(sink_error):
     class FailingSink:
+        def __init__(self):
+            self.calls = 0
+
         def write(self, record):
-            raise sink_error
+            self.calls += 1
+            if record.event == "terminal":
+                raise sink_error
 
     guard = a_guard(FailingSink())
     original = KeyboardInterrupt()
@@ -146,7 +151,8 @@ def test_decorator_base_exception_survives_a_failing_audit_sink(sink_error):
 def test_decorator_failing_sink_does_not_corrupt_the_system_exit_code():
     class ExitingSink:
         def write(self, record):
-            raise SystemExit(1)
+            if record.event == "terminal":
+                raise SystemExit(1)
 
     guard = a_guard(ExitingSink())
 

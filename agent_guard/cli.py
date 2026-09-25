@@ -16,7 +16,7 @@ from agent_guard import (
     load_policy,
     with_bundled,
 )
-from agent_guard.guard import ApprovalRequest, deny_by_default
+from agent_guard.guard import ApprovalGrant, ApprovalRequest, deny_by_default
 from agent_guard.mcp import run_proxy
 from agentguard_identity import Broker, ContainerRuntime, LocalAttestor, LocalRuntime, RefusedError, RuntimeSpec
 
@@ -124,11 +124,17 @@ def _default_policy() -> Policy:
     )
 
 
-def _tty_approver(request: ApprovalRequest) -> bool:
+def _tty_approver(request: ApprovalRequest) -> ApprovalGrant | None:
     if not sys.stdin.isatty():
-        return False
-    answer = input(f"\n  approve '{request.tool}: {request.args.get('cmd', request.args)}'? [{request.reason}] (y/N) ")
-    return answer.strip().lower() in {"y", "yes"}
+        return None
+    answer = input(
+        f"\n  approve '{request.tool}: {request.args.get('cmd', request.args)}'? [{request.reason}]\n"
+        f"  rule={request.rule_id or '-'} tier={request.trust_tier}\n"
+        f"  call={request.call_id} sha256={request.call_digest}\n  (y/N) "
+    )
+    if answer.strip().lower() in {"y", "yes"}:
+        return ApprovalGrant(request.call_id, request.call_digest)
+    return None
 
 
 def _build_sandbox(args):

@@ -49,6 +49,7 @@ sequenceDiagram
     participant B as Broker
     participant G as Guard
     participant P as Policy
+    participant H as Human approver
     participant AU as AuditSink
 
     R->>S: spawn(spec)
@@ -60,13 +61,34 @@ sequenceDiagram
     G->>P: evaluate(tool, args, trust_tier)
     P-->>G: Verdict(decision, rule_id, reason)
     alt decision == deny
+        G->>AU: decision(blocked)
         G-->>S: BlockedError (never dispatched)
+    else decision == require_human
+        G->>AU: decision(approval_requested, call_id, call_digest)
+        G->>H: ApprovalRequest(exact call, call_digest)
+        H-->>G: ApprovalGrant(call_id, call_digest) or deny
+        Note over G: stale, boolean, or mismatched grant fails closed
+        alt denied or mismatched grant
+            G->>AU: decision(blocked)
+            G-->>S: BlockedError (never dispatched)
+        else valid call-bound grant
+            G->>AU: release(call_id, call_digest)
+            G->>S: dispatch(tool, args)
+            S-->>G: result or error
+            G->>AU: terminal(call_id, outcome)
+        end
     else decision == allow
+        G->>AU: release(call_id, call_digest)
+        Note over AU: intent written before dispatch;\nfail closed if this write fails
         G->>S: dispatch(tool, args)
-        S-->>G: result
+        S-->>G: result or error
+        G->>AU: terminal(call_id, outcome)
     end
-    G->>AU: record(verdict, executed)
 ```
+
+The `call_digest` binds agent ID, tool, exact arguments, and the policy verdict. A
+release without a terminal event is visible to `unresolved_releases()` when the
+release record remains in the supplied stream.
 
 ## Sequence — write-content scanning (the newest pillar)
 

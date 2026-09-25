@@ -7,7 +7,7 @@ import hmac
 import json
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -45,6 +45,12 @@ class AuditRecord:
     executed: bool
     sig: str | None = None
     error: str | None = None
+    # Optional lifecycle fields. When absent, _signable_body omits them so records
+    # signed by older versions keep verifying after an in-memory upgrade.
+    event: str | None = None
+    call_id: str | None = None
+    call_digest: str | None = None
+    outcome: str | None = None
 
 
 class AuditSink(Protocol):
@@ -118,6 +124,9 @@ class CallableAuditSink:
 
 def _signable_body(record: AuditRecord) -> bytes:
     payload = asdict(replace(record, sig=None))
+    for field in ("event", "call_id", "call_digest", "outcome"):
+        if payload[field] is None:
+            payload.pop(field)
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
@@ -239,6 +248,11 @@ def build_record(
     verdict: Verdict,
     executed: bool,
     error: str | None = None,
+    *,
+    event: str | None = None,
+    call_id: str | None = None,
+    call_digest: str | None = None,
+    outcome: str | None = None,
 ) -> AuditRecord:
     return AuditRecord(
         ts=datetime.now(timezone.utc).isoformat(),
@@ -250,4 +264,33 @@ def build_record(
         rule_id=verdict.rule_id,
         executed=executed,
         error=error,
+        event=event,
+        call_id=call_id,
+        call_digest=call_digest,
+        outcome=outcome,
     )
+
+
+def unresolved_releases(records: Iterable[AuditRecord]) -> list[AuditRecord]:
+    """Return released calls with no terminal event in the supplied audit stream.
+
+    This detects a missing terminal record only when the corresponding release
+    record is present. It cannot detect a producer that suppresses both events or
+    an operator that deletes/replaces the whole stream. It groups records but does
+    not authenticate them; verify signatures before relying on signed audit input.
+    """
+    materialized = list(records)
+    terminal_keys = {
+        (record.call_id, record.call_digest)
+        for record in materialized
+        if record.event == "terminal"
+        and record.executed
+        and record.outcome in {"returned", "raised", "unknown"}
+        and record.call_id
+        and record.call_digest
+    }
+    return [
+        record
+        for record in materialized
+        if record.event == "release" and record.call_id and (record.call_id, record.call_digest) not in terminal_keys
+    ]
