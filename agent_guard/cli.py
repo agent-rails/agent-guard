@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
 import subprocess
 import sys
 
@@ -35,6 +36,10 @@ def _shell(tool: str, args: dict) -> str:
         raise ValueError(f"unsupported tool '{tool}'")
     result = subprocess.run(args["cmd"], shell=True, capture_output=True, text=True, check=True)
     return (result.stdout + result.stderr).strip()
+
+
+def _strip_separator(command: list[str]) -> list[str]:
+    return command[1:] if command[:1] == ["--"] else list(command)
 
 
 def _default_policy() -> Policy:
@@ -190,7 +195,7 @@ def _run(args) -> int:
         approver=_tty_approver,
     )
 
-    command = " ".join(args.command)
+    command = shlex.join(args.command)
     print(f"[{token.agent_id} @ {token.trust_tier}] $ {command}", file=sys.stderr)
     exit_code = 0
     try:
@@ -335,7 +340,7 @@ def _explain(args) -> int:
     """
     import json
 
-    command = [c for c in (args.command or []) if c != "--"]
+    command = _strip_separator(args.command or [])
     if not command:
         print("nothing to explain; usage: guard explain -- <command>", file=sys.stderr)
         return 1
@@ -345,10 +350,7 @@ def _explain(args) -> int:
         return 1
 
     tool = args.tool
-    if tool == "shell":
-        tool_args = {"cmd": " ".join(command)}
-    else:
-        tool_args = {"cmd": " ".join(command)} if command else {}
+    tool_args = {"cmd": shlex.join(command) if tool == "shell" else " ".join(command)}
 
     policy = _resolve_policy(args)
     detail = policy.explain(tool, tool_args, trust_tier)
@@ -705,7 +707,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _run_guard(args) -> int:
-    command = [c for c in args.command if c != "--"]
+    command = _strip_separator(args.command)
     if not command:
         print("nothing to run; usage: guard run -- <command>", file=sys.stderr)
         return 1
