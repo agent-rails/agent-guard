@@ -350,7 +350,7 @@ def _explain(args) -> int:
         return 1
 
     tool = args.tool
-    tool_args = {"cmd": shlex.join(command)}
+    tool_args = {"cmd": shlex.join(command) if tool == "shell" else " ".join(command)}
 
     policy = _resolve_policy(args)
     detail = policy.explain(tool, tool_args, trust_tier)

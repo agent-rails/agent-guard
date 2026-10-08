@@ -18,9 +18,10 @@ Notable changes. This project follows [Semantic Versioning](https://semver.org).
   reach the command literally. To use shell syntax, pass it as one argument to a shell:
   `guard run -- sh -c 'a | b'`. A `--` that is part of the command (`rm -- -f`) is now
   kept; only the leading separator is removed. Policy rules match over the rendered
-  string, which is unchanged for unquoted tokens. An argument that contains whitespace
-  or shell metacharacters is now quoted, so a custom rule anchored with `$` or spanning
-  such an argument may need updating. Closes #48.
+  string, which is unchanged for unquoted tokens. For the `shell` tool an argument that
+  contains whitespace or shell metacharacters is now quoted, so a custom rule anchored
+  with `$` or spanning such an argument may need updating; `guard explain --tool <other>`
+  still joins with spaces, since quoting means nothing to a non-shell tool. Closes #48.
 - Audit: a tool call terminated by a `BaseException` (for example `KeyboardInterrupt`
   from Ctrl-C, or `SystemExit`) left no audit record at all, even though the guard had
   already released the call and the tool's side effects may have landed. `Guard.call`

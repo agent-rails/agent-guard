@@ -442,6 +442,32 @@ def test_explain_keeps_a_double_dash_that_is_part_of_the_command(capsys):
     assert "rm -- -f" in capsys.readouterr().out
 
 
+def test_explain_does_not_shell_quote_arguments_for_a_non_shell_tool(tmp_path, capsys):
+    import json
+
+    policy = tmp_path / "sql.json"
+    policy.write_text(
+        json.dumps(
+            {
+                "default": "allow",
+                "rules": [
+                    {
+                        "id": "unscoped-delete",
+                        "decision": "deny",
+                        "tools": ["sql"],
+                        "arg_patterns": [r"(?i)delete\s+from\s+\w+\s*;?\s*$"],
+                        "reason": "unscoped delete",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    code = main(["explain", "--policy", str(policy), "--tool", "sql", "--", "DELETE FROM users"])
+    assert code == 3
+    assert "unscoped-delete" in capsys.readouterr().out
+
+
 def test_run_does_not_interpret_shell_operators_in_separate_arguments(capsys):
     code = main(["run", "--dev-trust-runtime", "--", "echo", "a;", "exit", "42"])
     assert code == 0
