@@ -6,6 +6,18 @@ Notable changes. This project follows [Semantic Versioning](https://semver.org).
 
 ### Fixed
 
+- CLI: `guard run` and `guard explain` re-joined the command's argv with spaces before
+  handing it to `shell=True`, so the command that executed was not the command the
+  operator typed: `guard run -- sh -c 'exit 42'` ran `sh -c exit 42` and exited 0, quoting
+  that suppresses glob expansion was stripped and then re-interpreted, and whitespace
+  inside an argument was collapsed. The audit record and the policy engine saw the same
+  mangled string, so this was a fidelity defect and not a policy bypass. Both commands now
+  render argv with `shlex.join`, so the shell re-parses exactly the argv that was passed
+  and the recorded `cmd` is a faithful, re-executable rendering. **Breaking:** shell
+  operators in separate arguments (`;`, `|`, `&&`, `$VAR`, globs) are now quoted and
+  reach the command literally. To use shell syntax, pass it as one argument to a shell:
+  `guard run -- sh -c 'a | b'`. Policy matching is unchanged — rules match over the
+  rendered string, and `shlex.join` leaves ordinary tokens unquoted. Closes #48.
 - Audit: a tool call terminated by a `BaseException` (for example `KeyboardInterrupt`
   from Ctrl-C, or `SystemExit`) left no audit record at all, even though the guard had
   already released the call and the tool's side effects may have landed. `Guard.call`

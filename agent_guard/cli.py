@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
 import subprocess
 import sys
 
@@ -190,7 +191,7 @@ def _run(args) -> int:
         approver=_tty_approver,
     )
 
-    command = " ".join(args.command)
+    command = shlex.join(args.command)
     print(f"[{token.agent_id} @ {token.trust_tier}] $ {command}", file=sys.stderr)
     exit_code = 0
     try:
@@ -345,10 +346,7 @@ def _explain(args) -> int:
         return 1
 
     tool = args.tool
-    if tool == "shell":
-        tool_args = {"cmd": " ".join(command)}
-    else:
-        tool_args = {"cmd": " ".join(command)} if command else {}
+    tool_args = {"cmd": shlex.join(command)}
 
     policy = _resolve_policy(args)
     detail = policy.explain(tool, tool_args, trust_tier)

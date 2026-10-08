@@ -329,6 +329,8 @@ guard run --dev-trust-runtime -- git push --force      # gated: prompts a human
 guard run --policy policy.example.yaml --audit run.jsonl -- ./do-thing.sh
 ```
 
+The command is executed as the argv you pass: each argument reaches the program as written, and shell operators in separate arguments (`;`, `|`, `&&`, `$VAR`, globs) are passed literally, not interpreted. To use shell syntax, pass it as a single argument to a shell: `guard run -- sh -c 'make test | tee out.log'`. Policy rules and the audit record see the same rendering (`shlex.join` of the argv), and `guard explain` renders it identically, so `explain` predicts `run`.
+
 `guard run` is a wrapper, so it is transparent about the command's own result — the command's exit status propagates, and a signal maps to `128 + N` the way a shell reports it:
 
 | Exit | Meaning |

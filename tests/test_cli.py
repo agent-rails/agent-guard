@@ -404,14 +404,54 @@ def test_shell_exit_status_and_signal_are_distinguishable_in_the_audit_trail(tmp
 def test_run_propagates_child_exit_code_and_still_prints_output(capsys):
     """`guard run` is a wrapper; `guard run -- make test` exiting 0 on a failing
     test suite makes it unusable in CI. Output must survive the propagation."""
-    code = main(["run", "--dev-trust-runtime", "--", "echo", "partial-output;", "exit", "42"])
+    code = main(["run", "--dev-trust-runtime", "--", "sh", "-c", "echo partial-output; exit 42"])
     assert code == 42
     assert "partial-output" in capsys.readouterr().out
 
 
 def test_run_maps_signal_to_128_plus_n():
-    code = main(["run", "--dev-trust-runtime", "--", "kill", "-9", "$$"])
+    code = main(["run", "--dev-trust-runtime", "--", "sh", "-c", "kill -9 $$"])
     assert code == 137
+
+
+def test_run_preserves_argument_boundaries():
+    code = main(["run", "--dev-trust-runtime", "--", "sh", "-c", "exit 42"])
+    assert code == 42
+
+
+def test_run_does_not_expand_quoted_glob(tmp_path, monkeypatch, capsys):
+    (tmp_path / "alpha").write_text("")
+    (tmp_path / "beta").write_text("")
+    monkeypatch.chdir(tmp_path)
+    assert main(["run", "--dev-trust-runtime", "--", "echo", "*"]) == 0
+    assert capsys.readouterr().out.strip() == "*"
+
+
+def test_run_preserves_whitespace_inside_an_argument(capsys):
+    assert main(["run", "--dev-trust-runtime", "--", "printf", "%s|", "a b", "c  d"]) == 0
+    assert capsys.readouterr().out.strip() == "a b|c  d|"
+
+
+def test_run_does_not_interpret_shell_operators_in_separate_arguments(capsys):
+    code = main(["run", "--dev-trust-runtime", "--", "echo", "a;", "exit", "42"])
+    assert code == 0
+    assert capsys.readouterr().out.strip() == "a; exit 42"
+
+
+def test_run_and_explain_render_the_same_command_the_audit_records(tmp_path, capsys):
+    import json
+    import shlex
+
+    argv = ["sh", "-c", "echo 'a  b'"]
+    audit = tmp_path / "render.jsonl"
+    assert main(["run", "--dev-trust-runtime", "--audit", str(audit), "--", *argv]) == 0
+    capsys.readouterr()
+    assert main(["explain", "--", *argv]) == 0
+    explained = capsys.readouterr().out
+
+    rendered = shlex.join(argv)
+    assert _records(audit)[0]["args"]["cmd"] == rendered
+    assert json.dumps({"cmd": rendered}, sort_keys=True) in explained
 
 
 def test_run_failing_command_is_not_a_traceback(capsys):
