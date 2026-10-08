@@ -38,6 +38,10 @@ def _shell(tool: str, args: dict) -> str:
     return (result.stdout + result.stderr).strip()
 
 
+def _strip_separator(command: list[str]) -> list[str]:
+    return command[1:] if command[:1] == ["--"] else list(command)
+
+
 def _default_policy() -> Policy:
     return Policy.from_dict(
         {
@@ -336,7 +340,7 @@ def _explain(args) -> int:
     """
     import json
 
-    command = [c for c in (args.command or []) if c != "--"]
+    command = _strip_separator(args.command or [])
     if not command:
         print("nothing to explain; usage: guard explain -- <command>", file=sys.stderr)
         return 1
@@ -703,7 +707,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _run_guard(args) -> int:
-    command = [c for c in args.command if c != "--"]
+    command = _strip_separator(args.command)
     if not command:
         print("nothing to run; usage: guard run -- <command>", file=sys.stderr)
         return 1

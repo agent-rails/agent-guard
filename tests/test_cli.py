@@ -432,6 +432,16 @@ def test_run_preserves_whitespace_inside_an_argument(capsys):
     assert capsys.readouterr().out.strip() == "a b|c  d|"
 
 
+def test_run_keeps_a_double_dash_that_is_part_of_the_command(capsys):
+    assert main(["run", "--dev-trust-runtime", "--", "printf", "[%s]", "a", "--", "b"]) == 0
+    assert capsys.readouterr().out.strip() == "[a][--][b]"
+
+
+def test_explain_keeps_a_double_dash_that_is_part_of_the_command(capsys):
+    assert main(["explain", "--", "rm", "--", "-f"]) == 0
+    assert "rm -- -f" in capsys.readouterr().out
+
+
 def test_run_does_not_interpret_shell_operators_in_separate_arguments(capsys):
     code = main(["run", "--dev-trust-runtime", "--", "echo", "a;", "exit", "42"])
     assert code == 0

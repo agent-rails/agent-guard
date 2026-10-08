@@ -16,8 +16,11 @@ Notable changes. This project follows [Semantic Versioning](https://semver.org).
   and the recorded `cmd` is a faithful, re-executable rendering. **Breaking:** shell
   operators in separate arguments (`;`, `|`, `&&`, `$VAR`, globs) are now quoted and
   reach the command literally. To use shell syntax, pass it as one argument to a shell:
-  `guard run -- sh -c 'a | b'`. Policy matching is unchanged — rules match over the
-  rendered string, and `shlex.join` leaves ordinary tokens unquoted. Closes #48.
+  `guard run -- sh -c 'a | b'`. A `--` that is part of the command (`rm -- -f`) is now
+  kept; only the leading separator is removed. Policy rules match over the rendered
+  string, which is unchanged for unquoted tokens. An argument that contains whitespace
+  or shell metacharacters is now quoted, so a custom rule anchored with `$` or spanning
+  such an argument may need updating. Closes #48.
 - Audit: a tool call terminated by a `BaseException` (for example `KeyboardInterrupt`
   from Ctrl-C, or `SystemExit`) left no audit record at all, even though the guard had
   already released the call and the tool's side effects may have landed. `Guard.call`
