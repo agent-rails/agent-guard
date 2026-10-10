@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import gc
 import warnings
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
@@ -137,7 +138,7 @@ def test_decorated_async_generator_function_is_rejected():
     assert audit.records[-1].outcome == "unknown"
 
 
-def test_async_iterator_object_is_rejected_and_recorded_as_unknown():
+def test_async_iterator_object_and_async_iterable_are_ordinary_lazy_values():
     guard, audit = make_guard()
 
     class Stream:
@@ -147,9 +148,31 @@ def test_async_iterator_object_is_rejected_and_recorded_as_unknown():
         async def __anext__(self):
             raise StopAsyncIteration
 
-    with pytest.raises(AsyncDispatchError):
-        guard.call(lambda tool, args: Stream(), "shell", {})
-    assert audit.records[-1].outcome == "unknown"
+    class Iterable:
+        def __aiter__(self):
+            return Stream()
+
+    for value in (Stream(), Iterable()):
+        assert guard.call(lambda tool, args, value=value: value, "shell", {}) is value
+        assert audit.records[-1].outcome == "returned"
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        pytest.param(MagicMock, id="MagicMock"),
+        pytest.param(AsyncMock, id="AsyncMock"),
+        pytest.param(Mock, id="Mock"),
+        pytest.param(lambda: MagicMock(spec=dict), id="MagicMock-spec"),
+        pytest.param(lambda: {"ok": True}, id="dict"),
+        pytest.param(lambda: None, id="none"),
+    ],
+)
+def test_ordinary_return_values_including_test_doubles_are_recorded_as_returned(factory):
+    guard, audit = make_guard()
+    value = factory()
+    assert guard.call(lambda tool, args: value, "shell", {}) is value
+    assert audit.records[-1].outcome == "returned"
 
 
 def test_result_that_cannot_be_classified_is_recorded_as_unknown_not_as_a_dispatch_failure():
@@ -165,10 +188,11 @@ def test_result_that_cannot_be_classified_is_recorded_as_unknown_not_as_a_dispat
         landed.append(tool)
         return Hostile()
 
-    with pytest.raises(AsyncDispatchError):
+    with pytest.raises(AsyncDispatchError) as caught:
         guard.call(dispatch, "shell", {})
     assert landed == ["shell"]
     assert audit.records[-1].outcome == "unknown"
+    assert isinstance(caught.value.__cause__, RuntimeError)
 
 
 def test_synchronous_generator_remains_a_returned_lazy_result():

@@ -27,10 +27,11 @@ HumanApprover = Callable[["ApprovalRequest"], "ApprovalGrant | None"]
 
 
 class AsyncDispatchError(TypeError):
-    """Dispatch returned an awaitable or an async iterator. `Guard.call` is synchronous and never
-    drives it, so an audit record would otherwise attest a completed call for a tool body that had
-    not run. `outcome_unknown` is False only when the result was a coroutine that never started and
-    was closed; anything else may already be executing or may run later."""
+    """Dispatch returned an awaitable or an async generator, which is what `async def` produces.
+    `Guard.call` is synchronous and never drives it, so an audit record would otherwise attest a
+    completed call for a tool body that had not run. `outcome_unknown` is False only when the
+    result was a coroutine that never started and was closed; anything else may already be
+    executing or may run later."""
 
     def __init__(self, tool: str, outcome_unknown: bool) -> None:
         detail = (
@@ -39,7 +40,7 @@ class AsyncDispatchError(TypeError):
             else "the coroutine was closed without running"
         )
         super().__init__(
-            f"dispatch for tool '{tool}' returned an async result (awaitable or async iterator) "
+            f"dispatch for tool '{tool}' returned an async result (awaitable or async generator) "
             f"that Guard.call does not drive; {detail}"
         )
         self.tool = tool
@@ -467,14 +468,16 @@ def _bind_explicit_defaults(bound: inspect.BoundArguments) -> None:
 
 def _async_dispatch_error(tool: str, result: Any) -> AsyncDispatchError | None:
     try:
-        if not (inspect.isawaitable(result) or inspect.isasyncgen(result) or hasattr(type(result), "__anext__")):
+        if not (inspect.isawaitable(result) or inspect.isasyncgen(result)):
             return None
         never_started = inspect.iscoroutine(result) and inspect.getcoroutinestate(result) == inspect.CORO_CREATED
         if never_started:
             result.close()
         return AsyncDispatchError(tool, outcome_unknown=not never_started)
-    except Exception:  # noqa: BLE001 - the tool already returned; failing to classify its result must not read as a dispatch failure
-        return AsyncDispatchError(tool, outcome_unknown=True)
+    except Exception as err:  # noqa: BLE001 - the tool already returned; failing to classify its result must not read as a dispatch failure
+        unclassified = AsyncDispatchError(tool, outcome_unknown=True)
+        unclassified.__cause__ = err
+        return unclassified
 
 
 def _flatten_bound(bound: inspect.BoundArguments) -> dict[str, Any]:
