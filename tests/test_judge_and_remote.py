@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from agent_guard import (
+    ApprovalGrant,
     BlockedError,
     Decision,
     Guard,
@@ -85,7 +86,13 @@ def test_llm_judge_denies_on_model_deny():
 def test_llm_judge_allow_is_clamped_to_ceiling():
     judge = LLMJudge(complete=lambda p: "VERDICT: ALLOW — fine")
     audit = MemoryAuditSink()
-    guard = Guard(judge_policy(), audit=audit, agent_id="a", judge=judge, approver=lambda r: True)
+    guard = Guard(
+        judge_policy(),
+        audit=audit,
+        agent_id="a",
+        judge=judge,
+        approver=lambda r: ApprovalGrant(r.call_id, r.call_digest),
+    )
     assert guard.call(raw_dispatch, "write", {"path": "/tmp/x"}) == "ran:write"
     assert audit.records[-1].decision == "require_human"
 

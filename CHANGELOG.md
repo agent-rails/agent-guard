@@ -4,6 +4,19 @@ Notable changes. This project follows [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+### Added
+
+- `Guard.call()` and `@guarded` now write a call-bound release event before dispatch and a terminal event afterward. Both share a call ID and SHA-256 digest over the agent, trust tier, tool, arguments, and policy verdict. `unresolved_releases()` identifies retained release events without a matching terminal event. MCP result reconciliation remains outside this change because the proxy does not observe downstream outcomes.
+- Lifecycle fields are optional and excluded from the signed body when absent, preserving verification of existing per-record HMACs.
+- If persisting the release event fails, dispatch is not called and a best-effort terminal event with `outcome="not_dispatched"` and `executed=false` closes the release, so `unresolved_releases()` no longer reports a call that never ran. If that close-out write also fails, the release stays unresolved, which now means either possibly-applied or never dispatched.
+
+### Changed
+
+- **Breaking (0.x):** custom human approvers must return `ApprovalGrant(call_id, call_digest)` for the exact request; previous boolean callbacks now fail closed. `ApprovalRequest` exposes the call binding and verdict context.
+- **Breaking (0.x):** tool arguments are frozen into one canonical JSON form at the boundary, and that single form is what the policy evaluates, the approver is shown, the digest binds, the audit records and the tool receives. Arguments must be JSON-serializable: a `datetime`, `bytes`, `set`, NaN, a lone surrogate, mixed-type dict keys or a circular reference is now blocked with an audited `decision`/`blocked` record (`rule_id="args-not-canonical"`, empty `args`) and `BlockedError`; `Guard.decide()` returns `(False, deny)`. Previously these dispatched. Tuples arrive as lists and non-string dict keys as strings. Nesting deeper than 64 levels is blocked the same way. An LLM judge receives a detached copy, so it cannot change what is dispatched after static policy has run. `guard mcp` and `guard check` inherit this: a `tools/call` or payload with NaN or other non-canonical arguments is now denied (it was forwarded or allowed before), and its audit record carries empty `args` (decided by an internal marker, not by a rule id, so a policy rule cannot blank the arguments of other calls). A message nested too deeply to parse is rejected by `guard mcp` and makes `guard check` exit 1, where both previously crashed.
+- **Breaking (0.x):** `@guarded` binds positional arguments to the function's parameter names, so the policy, approver, digest and audit record cover them (previously positional arguments bypassed all four). The function now runs on the canonical copy, not the caller's objects: a mutable out-parameter is no longer written through, and a non-JSON argument such as a lock or socket is blocked. A keyword passed through `**kwargs` that shadows a positional-only parameter name raises `TypeError`. Omitted default values are bound too, so the policy sees what the tool will run with; a default that is not JSON-serializable blocks the call. Decorating an instance method or classmethod now blocks every call, because `self` and `cls` are not JSON; decorate a plain function instead. A `functools.partial` that freezes positional arguments is rejected at decoration time because those values would be invisible to the policy; bind them by keyword.
+- **Breaking (0.x):** one allowed call now produces two `executed=true` records (`release` and `terminal`). Consumers that count executions must filter on `event`.
+
 ### Fixed
 
 - CLI: `guard run` and `guard explain` re-joined the command's argv with spaces before
@@ -33,8 +46,12 @@ Notable changes. This project follows [Semantic Versioning](https://semver.org).
   its own — the original terminating exception instance still propagates, with the sink
   error chained as `__cause__`; on this path the terminating signal is never replaced by
   an audit error, so a sink raising `SystemExit(1)` can no longer mask a dispatch's
-  `SystemExit(3)` or turn a Ctrl-C into an ordinary-looking exit. Not breaking: no schema
-  change, and the existing `Exception` handling on the dispatch path is untouched.
+  `SystemExit(3)` or turn a Ctrl-C into an ordinary-looking exit. If a normal dispatch
+  exception and a terminal audit write both fail with ordinary exceptions, the dispatch
+  exception remains primary and the audit failure is chained above any cause it already
+  carried; an operator signal (`KeyboardInterrupt`, `SystemExit`) raised by the sink
+  outranks an ordinary dispatch exception and propagates instead. The same precedence applies to the best-effort `not_dispatched` close-out: an operator signal raised while closing a failed release replaces the release error, which stays as `__context__`. Chaining skips a link that would create a `__cause__` cycle, such as a sink re-raising the dispatch exception object itself. Existing records without lifecycle fields keep their
+  original HMAC verification behavior.
 - Audit: `MultiAuditSink.write` caught only `Exception`, so a `BaseException` from one
   sink aborted the fan-out and every sink queued behind it was skipped — including the
   durable local sink that exists precisely to survive a flaky remote, falsifying the

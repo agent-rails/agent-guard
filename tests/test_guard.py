@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from agent_guard import BlockedError, Decision, Guard, MemoryAuditSink, Policy
+from agent_guard import ApprovalGrant, BlockedError, Decision, Guard, MemoryAuditSink, Policy
+from agent_guard.audit import unresolved_releases
 from agentguard_identity import Attestation, AttestationResult, Broker
 from agentguard_identity.pop import PoPKeypair
 from agentguard_identity.token import Token, sign
@@ -62,6 +63,11 @@ def test_allow_passes_through_and_audits():
     assert result == "ran:sql"
     assert audit.records[-1].executed is True
     assert audit.records[-1].decision == "allow"
+    assert [record.event for record in audit.records] == ["release", "terminal"]
+    assert audit.records[0].call_id == audit.records[1].call_id
+    assert audit.records[0].call_digest == audit.records[1].call_digest
+    assert audit.records[1].outcome == "returned"
+    assert unresolved_releases(audit.records) == []
 
 
 def test_allowed_dispatch_failure_is_audited():
@@ -75,6 +81,27 @@ def test_allowed_dispatch_failure_is_audited():
     assert audit.records[-1].executed is True
     assert audit.records[-1].decision == "allow"
     assert audit.records[-1].error == "dispatch failed"
+    assert audit.records[-1].outcome == "raised"
+
+
+def test_terminal_audit_failure_does_not_hide_dispatch_failure():
+    original = RuntimeError("tool failed")
+    audit_failure = OSError("terminal audit unavailable")
+
+    class Sink:
+        def write(self, record):
+            if record.event == "terminal":
+                raise audit_failure
+
+    guard = Guard(make_policy(), audit=Sink(), agent_id="agent-test")
+
+    def dispatch(tool, args):
+        raise original
+
+    with pytest.raises(RuntimeError, match="tool failed") as caught:
+        guard.call(dispatch, "sql", {"query": "SELECT 1"})
+    assert caught.value is original
+    assert caught.value.__cause__ is audit_failure
 
 
 def test_keyboard_interrupt_during_dispatch_is_audited():
@@ -85,10 +112,11 @@ def test_keyboard_interrupt_during_dispatch_is_audited():
 
     with pytest.raises(KeyboardInterrupt):
         guard.call(interrupted_dispatch, "sql", {"query": "SELECT 1"})
-    assert len(audit.records) == 1
+    assert len(audit.records) == 2
     assert audit.records[-1].executed is True
     assert audit.records[-1].decision == "allow"
     assert audit.records[-1].error == "KeyboardInterrupt: dispatch did not return; side-effect outcome unknown"
+    assert audit.records[-1].outcome == "unknown"
 
 
 def test_system_exit_during_dispatch_is_audited():
@@ -99,7 +127,7 @@ def test_system_exit_during_dispatch_is_audited():
 
     with pytest.raises(SystemExit):
         guard.call(exiting_dispatch, "sql", {"query": "SELECT 1"})
-    assert len(audit.records) == 1
+    assert len(audit.records) == 2
     assert audit.records[-1].executed is True
     assert audit.records[-1].error == "SystemExit: dispatch did not return; side-effect outcome unknown"
 
@@ -117,8 +145,13 @@ def test_base_exception_survives_a_failing_audit_sink(sink_error):
     that is the input the audit guard's own except clause has to be wide enough to catch."""
 
     class FailingSink:
+        def __init__(self):
+            self.calls = 0
+
         def write(self, record):
-            raise sink_error
+            self.calls += 1
+            if record.event == "terminal":
+                raise sink_error
 
     guard = Guard(make_policy(), audit=FailingSink(), agent_id="agent-test")
     original = KeyboardInterrupt()
@@ -137,8 +170,13 @@ def test_failing_sink_does_not_corrupt_the_system_exit_code():
     replaced by the sink's, so a shell reads the wrong status."""
 
     class ExitingSink:
+        def __init__(self):
+            self.calls = 0
+
         def write(self, record):
-            raise SystemExit(1)
+            self.calls += 1
+            if record.event == "terminal":
+                raise SystemExit(1)
 
     guard = Guard(make_policy(), audit=ExitingSink(), agent_id="agent-test")
 
@@ -159,8 +197,9 @@ def test_wrap_inherits_base_exception_auditing():
     wrapped = guard.wrap(interrupted_dispatch)
     with pytest.raises(KeyboardInterrupt):
         wrapped("sql", {"query": "SELECT 1"})
-    assert len(audit.records) == 1
+    assert len(audit.records) == 2
     assert "side-effect outcome unknown" in audit.records[-1].error
+    assert unresolved_releases(audit.records) == []
 
 
 def test_deny_blocks_and_does_not_execute():
@@ -179,11 +218,49 @@ def test_require_human_blocks_when_denied():
 
 
 def test_require_human_runs_when_approved():
-    guard, audit = make_guard(approver=lambda req: True)
+    requests = []
+    guard, audit = make_guard(approver=lambda req: requests.append(req) or ApprovalGrant(req.call_id, req.call_digest))
     result = guard.call(raw_dispatch, "git", {"cmd": "git push --force origin main"})
     assert result == "ran:git"
     assert audit.records[-1].executed is True
     assert audit.records[-1].decision == "require_human"
+    assert requests[0].call_id == audit.records[0].call_id
+    assert requests[0].call_digest == audit.records[0].call_digest
+
+
+def test_approval_argument_mutation_fails_closed():
+    dispatched = []
+
+    def mutating_approver(request):
+        request.args["cmd"] = "git push --force attacker/branch"
+        return True
+
+    guard, audit = make_guard(approver=mutating_approver)
+    with pytest.raises(BlockedError, match="arguments changed"):
+        guard.call(lambda tool, args: dispatched.append(args), "git", {"cmd": "git push --force origin main"})
+    assert dispatched == []
+    assert audit.records[-1].outcome == "blocked"
+
+
+def test_unbound_or_stale_approval_is_rejected():
+    for approval in (True, ApprovalGrant("stale-call", "stale-digest")):
+        guard, audit = make_guard(approver=lambda request, response=approval: response)
+        with pytest.raises(BlockedError):
+            guard.call(raw_dispatch, "git", {"cmd": "git push --force origin main"})
+        assert audit.records[-1].outcome == "blocked"
+
+
+def test_audit_release_failure_prevents_dispatch():
+    dispatched = []
+
+    class FailingSink:
+        def write(self, record):
+            raise RuntimeError("audit unavailable")
+
+    guard = Guard(make_policy(), audit=FailingSink(), agent_id="agent-test")
+    with pytest.raises(RuntimeError, match="audit unavailable"):
+        guard.call(lambda tool, args: dispatched.append(args), "sql", {"query": "SELECT 1"})
+    assert dispatched == []
 
 
 def test_require_human_defaults_to_deny():

@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from agent_guard import (
+    ApprovalGrant,
     BlockedError,
     Guard,
     InMemoryVelocityLimiter,
@@ -215,7 +216,13 @@ def test_approved_human_gate_consumes_velocity_budget():
         }
     )
     lim = limiter(VelocityRule(tools=("deploy",), max_calls=2, window_seconds=10))
-    guard = Guard(policy, audit=audit, agent_id="a", approver=lambda req: True, velocity=lim)
+    guard = Guard(
+        policy,
+        audit=audit,
+        agent_id="a",
+        approver=lambda req: ApprovalGrant(req.call_id, req.call_digest),
+        velocity=lim,
+    )
     assert guard.call(raw_dispatch, "deploy", {}) == "ran:deploy"
     assert guard.call(raw_dispatch, "deploy", {}) == "ran:deploy"
     with pytest.raises(BlockedError):
