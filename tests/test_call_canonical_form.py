@@ -109,7 +109,7 @@ def test_decorator_policy_and_audit_cover_positional_arguments():
         return list(payload)
 
     assert act(["safe"]) == ["safe"]
-    assert audit.records[0].args == {"payload": ["safe"]}
+    assert audit.records[0].args == {"payload": ["safe"], "flag": False}
     with pytest.raises(BlockedError):
         act(["danger"])
     assert audit.records[-1].rule_id == "block-danger"
@@ -221,3 +221,170 @@ def test_operator_signal_from_terminal_sink_outranks_an_ordinary_dispatch_error(
     with pytest.raises(SystemExit) as caught:
         guard.call(dispatch, "act", {"q": 1})
     assert caught.value.code == 9
+
+
+def test_decorator_binds_default_values_so_policy_sees_what_the_tool_runs():
+    policy = Policy.from_dict(
+        {
+            "default": "allow",
+            "rules": [
+                {"id": "no-force", "decision": "deny", "tools": ["push"], "arg_patterns": ["--force"], "reason": "no"}
+            ],
+        }
+    )
+    audit = MemoryAuditSink()
+    guard = Guard(policy, audit=audit, agent_id="agent-test")
+    ran = []
+
+    @guarded(guard, "push")
+    def push(branch, mode="--force"):
+        ran.append((branch, mode))
+
+    with pytest.raises(BlockedError):
+        push("main")
+    assert ran == []
+    assert audit.records[0].args == {"branch": "main", "mode": "--force"}
+
+
+def test_decorator_blocks_a_default_that_is_not_json():
+    guard, audit = make_guard()
+
+    sentinel = object()
+
+    @guarded(guard, "act")
+    def act(value, marker=sentinel):
+        return value
+
+    with pytest.raises(BlockedError, match="not canonical JSON"):
+        act(1)
+    assert audit.records[0].rule_id == "args-not-canonical"
+
+
+def test_decorator_on_a_method_fails_closed_because_self_is_not_json():
+    guard, audit = make_guard()
+
+    class Service:
+        @guarded(guard, "act")
+        def run(self, value):
+            return value
+
+    with pytest.raises(BlockedError, match="not canonical JSON"):
+        Service().run(1)
+    assert audit.records[0].executed is False
+
+
+def nested(depth: int) -> dict:
+    root: dict = {}
+    cursor = root
+    for _ in range(depth):
+        cursor["k"] = {}
+        cursor = cursor["k"]
+    return root
+
+
+def test_deeply_nested_args_are_blocked_and_audited_not_crashed():
+    guard, audit = make_guard()
+    dispatched = []
+    with pytest.raises(BlockedError, match="nest deeper"):
+        guard.call(lambda tool, args: dispatched.append(args), "act", {"n": nested(600)})
+    assert dispatched == []
+    assert [(r.event, r.outcome, r.args) for r in audit.records] == [("decision", "blocked", {})]
+
+
+def test_nesting_at_the_limit_is_accepted_and_one_past_it_is_not():
+    guard, _ = make_guard()
+    assert guard.decide("act", {"n": nested(62)})[0] is True
+    assert guard.decide("act", {"n": nested(64)})[0] is False
+
+
+def test_judge_receives_a_detached_copy_and_cannot_change_the_dispatched_arguments():
+    from agent_guard import CallableJudge, Decision
+
+    policy = Policy.from_dict(
+        {
+            "default": "allow",
+            "rules": [
+                {
+                    "id": "judge-me",
+                    "decision": "allow",
+                    "tools": ["act"],
+                    "judge": True,
+                    "judge_ceiling": "allow",
+                    "reason": "judged",
+                }
+            ],
+        }
+    )
+
+    consulted = []
+
+    def mutating_judge(request):
+        consulted.append(request)
+        request.args["payload"] = "danger"
+        return Decision.ALLOW, "ok"
+
+    audit = MemoryAuditSink()
+    guard = Guard(policy, audit=audit, agent_id="agent-test", judge=CallableJudge(mutating_judge))
+    seen = []
+    guard.call(lambda tool, args: seen.append(args), "act", {"payload": "safe"})
+    assert len(consulted) == 1
+    assert seen == [{"payload": "safe"}]
+    assert audit.records[0].args == {"payload": "safe"}
+
+
+def test_record_never_stores_arguments_rejected_as_non_canonical():
+    guard, audit = make_guard()
+    _, verdict = guard.decide("act", {"when": datetime.datetime(2026, 1, 1)})
+    guard.record("act", {"when": datetime.datetime(2026, 1, 1)}, verdict, executed=False)
+    assert audit.records[0].args == {}
+
+
+def test_audit_error_that_is_the_dispatch_error_does_not_create_a_cause_cycle():
+    shared = OSError("shared")
+
+    class Sink:
+        def write(self, record):
+            if record.event == "terminal":
+                raise shared
+
+    guard, _ = make_guard(Sink())
+
+    def dispatch(tool, args):
+        raise shared
+
+    with pytest.raises(OSError) as caught:
+        guard.call(dispatch, "act", {"q": 1})
+    assert caught.value is shared
+    assert shared.__cause__ is None
+
+
+def test_reused_audit_error_does_not_leak_causes_between_calls():
+    reused = OSError("sink down")
+
+    class Sink:
+        def write(self, record):
+            if record.event == "terminal":
+                raise reused
+
+    guard, _ = make_guard(Sink())
+
+    def dispatch(tool, args):
+        raise ValueError("tool failed")
+
+    for _ in range(2):
+        with pytest.raises(ValueError) as caught:
+            guard.call(dispatch, "act", {"q": 1})
+        assert caught.value.__cause__ is reused
+    assert reused.__cause__ is None or reused.__cause__.__cause__ is None
+
+
+def test_mcp_proxy_denies_nan_arguments_and_records_empty_args():
+    from agent_guard import mcp_handle_line
+
+    guard, audit = make_guard()
+    line = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"act","arguments":{"x":NaN}}}'
+    forward, reply = mcp_handle_line(line, guard)
+    assert forward is None
+    assert "not canonical JSON" in reply
+    assert audit.records[0].rule_id == "args-not-canonical"
+    assert audit.records[0].args == {}

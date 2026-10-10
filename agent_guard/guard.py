@@ -176,7 +176,7 @@ class Guard:
             return False, verdict, _call_digest(self._agent_id, tool, args, verdict, self._trust_tier)
         verdict = self._policy.evaluate(tool, args, self._trust_tier)
         if verdict.needs_judge:
-            verdict = self._consult_judge(verdict, tool, args)
+            verdict = self._consult_judge(verdict, tool, copy.deepcopy(args))
         digest = _call_digest(self._agent_id, tool, args, verdict, self._trust_tier)
         if verdict.decision is Decision.DENY:
             return False, verdict, digest
@@ -226,6 +226,8 @@ class Guard:
         call_digest: str | None = None,
         outcome: str | None = None,
     ) -> None:
+        if verdict.rule_id == ARGS_NOT_CANONICAL_RULE_ID:
+            args = {}
         self._audit.write(
             build_record(
                 self._agent_id,
@@ -319,7 +321,7 @@ class Guard:
                 )
             except Exception as audit_err:
                 _chain_audit_failure(err, audit_err)
-                raise err from audit_err
+                raise err from err.__cause__
             raise
         except BaseException as err:
             try:
@@ -336,7 +338,7 @@ class Guard:
                 )
             except BaseException as audit_err:
                 _chain_audit_failure(err, audit_err)
-                raise err from audit_err
+                raise err from err.__cause__
             raise
         self.record(
             tool,
@@ -418,6 +420,7 @@ def guarded(guard: Guard, tool_name: str | None = None) -> Callable:
         @functools.wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             bound = signature.bind(*args, **kwargs)
+            bound.apply_defaults()
             return guard.call(_dispatch_bound(fn, bound), name, _flatten_bound(bound))
 
         return wrapper
@@ -453,6 +456,8 @@ def _dispatch_bound(fn: Callable, bound: inspect.BoundArguments) -> ToolDispatch
     return dispatch
 
 
+MAX_ARGS_DEPTH = 64
+ARGS_NOT_CANONICAL_RULE_ID = "args-not-canonical"
 _UNCANONICAL_ERRORS = (TypeError, ValueError, RecursionError)
 
 
@@ -460,7 +465,7 @@ def _uncanonical_verdict(err: Exception) -> Verdict:
     return Verdict(
         decision=Decision.DENY,
         reason=f"arguments are not canonical JSON; fail-closed to deny: {err}",
-        rule_id="args-not-canonical",
+        rule_id=ARGS_NOT_CANONICAL_RULE_ID,
     )
 
 
@@ -469,10 +474,39 @@ def _canonical_json(value: Any) -> bytes:
 
 
 def _canonical_args(args: dict[str, Any]) -> dict[str, Any]:
-    return json.loads(_canonical_json(args))
+    canonical = json.loads(_canonical_json(args))
+    if _nesting_depth(canonical) > MAX_ARGS_DEPTH:
+        raise ValueError(f"arguments nest deeper than {MAX_ARGS_DEPTH} levels")
+    return canonical
+
+
+def _nesting_depth(value: Any) -> int:
+    deepest = 0
+    pending = [(value, 1)]
+    while pending:
+        node, level = pending.pop()
+        if isinstance(node, dict):
+            children = node.values()
+        elif isinstance(node, list):
+            children = node
+        else:
+            continue
+        deepest = max(deepest, level)
+        pending.extend((child, level + 1) for child in children)
+    return deepest
+
+
+def _causes(exc: BaseException) -> list[BaseException]:
+    chain: list[BaseException] = []
+    while exc.__cause__ is not None and exc.__cause__ not in chain:
+        exc = exc.__cause__
+        chain.append(exc)
+    return chain
 
 
 def _chain_audit_failure(err: BaseException, audit_err: BaseException) -> None:
+    if audit_err is err or audit_err in _causes(err) or err in _causes(audit_err):
+        return
     if audit_err.__cause__ is None:
         audit_err.__cause__ = err.__cause__
     err.__cause__ = audit_err
