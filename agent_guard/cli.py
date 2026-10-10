@@ -420,7 +420,7 @@ def _check(args) -> int:
     try:
         raw = sys.stdin.read()
         payload = json.loads(raw)
-    except (json.JSONDecodeError, UnicodeDecodeError) as err:
+    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError) as err:
         print(f"malformed JSON payload on stdin: {err}", file=sys.stderr)
         return 1
 

@@ -388,3 +388,86 @@ def test_mcp_proxy_denies_nan_arguments_and_records_empty_args():
     assert "not canonical JSON" in reply
     assert audit.records[0].rule_id == "args-not-canonical"
     assert audit.records[0].args == {}
+
+
+def test_policy_rule_named_like_the_internal_marker_cannot_blank_the_audit_arguments():
+    policy = Policy.from_dict(
+        {
+            "default": "deny",
+            "rules": [{"id": "args-not-canonical", "decision": "allow", "tools": ["pay"], "reason": "ok"}],
+        }
+    )
+    audit = MemoryAuditSink()
+    guard = Guard(policy, audit=audit, agent_id="agent-test")
+    guard.call(lambda tool, args: "paid", "pay", {"to": "attacker", "amount": 1000000})
+    assert [record.args for record in audit.records] == [{"to": "attacker", "amount": 1000000}] * 2
+    _, verdict = guard.decide("pay", {"to": "attacker"})
+    guard.record("pay", {"to": "attacker"}, verdict, executed=True)
+    assert audit.records[-1].args == {"to": "attacker"}
+
+
+def test_decorator_allows_a_keyword_named_like_an_empty_var_positional():
+    guard, audit = make_guard()
+
+    @guarded(guard, "act")
+    def act(first, *rest, **options):
+        return first, rest, options
+
+    assert act(1, rest="safe") == (1, (), {"rest": "safe"})
+    assert audit.records[0].args == {"first": 1, "rest": "safe"}
+
+
+def test_decorator_rejects_a_partial_that_hides_positional_arguments():
+    from functools import partial
+
+    guard, _ = make_guard()
+
+    def tool(command, flag=False):
+        return command
+
+    with pytest.raises(TypeError, match="functools.partial"):
+        guarded(guard, "act")(partial(tool, "rm -rf /"))
+    assert guarded(guard, "act")(partial(tool, flag=True))(command="ls") == "ls"
+
+
+def test_skipped_chaining_still_shows_the_audit_failure_in_the_traceback():
+    import traceback
+
+    holder: list[BaseException] = []
+
+    class SinkError(Exception):
+        pass
+
+    class Sink:
+        def write(self, record):
+            if record.event == "terminal":
+                raise SinkError("wrapped terminal failure") from holder[0]
+
+    guard, _ = make_guard(Sink())
+
+    def dispatch(tool, args):
+        holder.append(ValueError("tool failed"))
+        raise holder[0]
+
+    with pytest.raises(ValueError) as caught:
+        guard.call(dispatch, "act", {"q": 1})
+    assert "wrapped terminal failure" in "".join(traceback.format_exception(caught.value))
+
+
+def test_mcp_proxy_rejects_a_message_too_deep_to_parse():
+    from agent_guard import mcp_handle_line
+
+    guard, audit = make_guard()
+    forward, reply = mcp_handle_line("[" * 100_000 + "]" * 100_000, guard)
+    assert forward is None
+    assert "nests too deeply" in reply
+
+
+def test_check_cli_rejects_a_payload_too_deep_to_parse(monkeypatch, capsys):
+    import io
+
+    from agent_guard.cli import main
+
+    monkeypatch.setattr("sys.stdin", io.StringIO("[" * 100_000 + "]" * 100_000))
+    assert main(["check"]) == 1
+    assert "malformed JSON payload" in capsys.readouterr().err

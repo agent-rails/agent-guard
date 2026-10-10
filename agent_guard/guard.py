@@ -226,7 +226,7 @@ class Guard:
         call_digest: str | None = None,
         outcome: str | None = None,
     ) -> None:
-        if verdict.rule_id == ARGS_NOT_CANONICAL_RULE_ID:
+        if isinstance(verdict, _UncanonicalVerdict):
             args = {}
         self._audit.write(
             build_record(
@@ -307,6 +307,7 @@ class Guard:
         try:
             result = dispatch(tool, call_args)
         except Exception as err:
+            audit_failure: BaseException | None = None
             try:
                 self.record(
                     tool,
@@ -320,10 +321,12 @@ class Guard:
                     outcome="raised",
                 )
             except Exception as audit_err:
-                _chain_audit_failure(err, audit_err)
-                raise err from err.__cause__
+                audit_failure = audit_err
+            if audit_failure is not None:
+                _chain_audit_failure(err, audit_failure)
             raise
         except BaseException as err:
+            audit_failure: BaseException | None = None
             try:
                 self.record(
                     tool,
@@ -337,8 +340,9 @@ class Guard:
                     outcome="unknown",
                 )
             except BaseException as audit_err:
-                _chain_audit_failure(err, audit_err)
-                raise err from err.__cause__
+                audit_failure = audit_err
+            if audit_failure is not None:
+                _chain_audit_failure(err, audit_failure)
             raise
         self.record(
             tool,
@@ -415,17 +419,27 @@ def guarded(guard: Guard, tool_name: str | None = None) -> Callable:
 
     def decorate(fn: Callable) -> Callable:
         name = tool_name or fn.__name__
+        if isinstance(fn, functools.partial) and fn.args:
+            raise TypeError(
+                "guarded() cannot see positional arguments frozen into functools.partial; bind them by keyword"
+            )
         signature = inspect.signature(fn)
 
         @functools.wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             bound = signature.bind(*args, **kwargs)
-            bound.apply_defaults()
+            _bind_explicit_defaults(bound)
             return guard.call(_dispatch_bound(fn, bound), name, _flatten_bound(bound))
 
         return wrapper
 
     return decorate
+
+
+def _bind_explicit_defaults(bound: inspect.BoundArguments) -> None:
+    for param_name, param in bound.signature.parameters.items():
+        if param_name not in bound.arguments and param.default is not inspect.Parameter.empty:
+            bound.arguments[param_name] = param.default
 
 
 def _flatten_bound(bound: inspect.BoundArguments) -> dict[str, Any]:
@@ -461,8 +475,12 @@ ARGS_NOT_CANONICAL_RULE_ID = "args-not-canonical"
 _UNCANONICAL_ERRORS = (TypeError, ValueError, RecursionError)
 
 
+class _UncanonicalVerdict(Verdict):
+    pass
+
+
 def _uncanonical_verdict(err: Exception) -> Verdict:
-    return Verdict(
+    return _UncanonicalVerdict(
         decision=Decision.DENY,
         reason=f"arguments are not canonical JSON; fail-closed to deny: {err}",
         rule_id=ARGS_NOT_CANONICAL_RULE_ID,
@@ -505,7 +523,10 @@ def _causes(exc: BaseException) -> list[BaseException]:
 
 
 def _chain_audit_failure(err: BaseException, audit_err: BaseException) -> None:
-    if audit_err is err or audit_err in _causes(err) or err in _causes(audit_err):
+    if audit_err is err or audit_err in _causes(err):
+        return
+    if err in _causes(audit_err):
+        err.__context__ = audit_err
         return
     if audit_err.__cause__ is None:
         audit_err.__cause__ = err.__cause__
