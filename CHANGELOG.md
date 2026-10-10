@@ -20,7 +20,7 @@ Notable changes. This project follows [Semantic Versioning](https://semver.org).
 
 ### Fixed
 
-- Audit: passing an `async def` callable as `dispatch` wrote `terminal`/`returned` at coroutine creation, before the tool body had run, so the audit trail attested a successful call that had not happened and any later failure went unaudited. `Guard.call`, `Guard.wrap` and `@guarded` now raise `AsyncDispatchError` (a `TypeError`) when dispatch returns an awaitable or an async iterator. A coroutine that never started is closed and the terminal event is `raised`; anything else (a `Task`, `Future`, async generator) may already be running or run later, is left untouched, and is recorded as `unknown`.
+- Audit: passing an `async def` callable as `dispatch` wrote `terminal`/`returned` at coroutine creation, before the tool body had run, so the audit trail attested a successful call that had not happened and any later failure went unaudited. `Guard.call`, `Guard.wrap` and `@guarded` now raise `AsyncDispatchError` (a `TypeError`) when dispatch returns an awaitable or an async generator, which is what `async def` produces. A coroutine that never started is closed and the terminal event is `raised`; anything else (a `Task`, `Future`, async generator) may already be running or run later, is left untouched, and is recorded as `unknown`. Other lazy results (sync generators, async iterator objects, async iterables) are ordinary values and stay `returned`.
 - Audit: a tool call terminated by a `BaseException` (for example `KeyboardInterrupt`
   from Ctrl-C, or `SystemExit`) left no audit record at all, even though the guard had
   already released the call and the tool's side effects may have landed. `Guard.call`
