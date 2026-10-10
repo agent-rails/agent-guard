@@ -13,7 +13,7 @@ from .audit import (
 )
 from .bundled import bundled_module, bundled_names, with_bundled
 from .decision import Decision, Verdict, clamp
-from .guard import ApprovalGrant, ApprovalRequest, BlockedError, Guard, guarded
+from .guard import ApprovalGrant, ApprovalRequest, AwaitableDispatchError, BlockedError, Guard, guarded
 from .judge import CallableJudge, Judge, JudgeRequest, LLMJudge, ReferenceJudge, build_prompt, parse_verdict
 from .mcp import handle_line as mcp_handle_line
 from .mcp import run_proxy as mcp_run_proxy
@@ -27,6 +27,7 @@ __all__ = [
     "ApprovalGrant",
     "AuditRecord",
     "AuditSink",
+    "AwaitableDispatchError",
     "BlockedError",
     "CallableAuditSink",
     "CallableJudge",
