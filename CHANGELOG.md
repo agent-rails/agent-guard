@@ -19,6 +19,7 @@ Notable changes. This project follows [Semantic Versioning](https://semver.org).
 
 ### Fixed
 
+- Audit: passing an `async def` callable as `dispatch` wrote `terminal`/`returned` at coroutine creation, before the tool body had run, so the audit trail attested a successful call that had not happened and any later failure went unaudited. `Guard.call`, `Guard.wrap` and `@guarded` now raise `AwaitableDispatchError` (a `TypeError`) when dispatch returns an awaitable. A coroutine that never started is closed and the terminal event is `raised`; any other awaitable (a `Task` or `Future`) may already be running, is left untouched, and is recorded as `unknown`. There is still no async surface; `acall()` is not added.
 - Audit: a tool call terminated by a `BaseException` (for example `KeyboardInterrupt`
   from Ctrl-C, or `SystemExit`) left no audit record at all, even though the guard had
   already released the call and the tool's side effects may have landed. `Guard.call`
