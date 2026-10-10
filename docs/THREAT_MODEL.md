@@ -67,6 +67,8 @@ What agent-guard defends against, per pillar, framed as Prevent / Contain / Dete
 
 This narrows the missing-evidence window for calls through `Guard.call()` and `guarded()`. It does not prove that every attempted action reached the guard: a producer can suppress both events, and an operator can delete or replace the whole audit stream. A hard interruption in the narrow gap after an allow decision but before the release event is written can also leave no release record. The approval-request event is written before invoking the human callback, so an interrupted prompt is visible. If persisting the release event fails, dispatch is not called and a best-effort `not_dispatched` terminal event closes the release; if that write also fails, an unresolved release means either possibly-applied or never dispatched. Repeated Ctrl-C during audit fan-out still stops fan-out by design.
 
+`Guard.call()` is synchronous. If dispatch returns an awaitable it is never awaited, so the call raises `AwaitableDispatchError` instead of recording `returned`: a coroutine that never started is closed and recorded as `raised`, and any other awaitable, which may already be running, is recorded as `unknown`. The record never attests completion for a body that did not run.
+
 The lifecycle applies to `Guard.call()` and the `guarded()` decorator. The MCP proxy does not observe downstream tool results and retains its forward-time record semantics; a null `error` there is unknown. `guard check` is a decision oracle, not an executor.
 
 **Explicit non-goals (stated in the sink's own docstring):**
