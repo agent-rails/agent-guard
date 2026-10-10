@@ -190,7 +190,7 @@ copy; it supports plain functions, not instance methods or partials that freeze 
 arguments. Nesting is limited to 64 levels. The release event is written before dispatch; the terminal
 event records whether dispatch returned, raised, or ended with an unknown outcome. If a process
 dies after release, `unresolved_releases(records)` identifies the release with no
-terminal event. Dispatch must be synchronous: an awaitable or async-iterator result (a coroutine, `Task`, async generator) raises `AsyncDispatchError` rather than being audited as returned. Audit-sink failure before release prevents dispatch and closes the release
+terminal event. Dispatch must be synchronous: an awaitable or async-generator result (what `async def` produces: a coroutine, `Task`, `Future`, async generator) raises `AsyncDispatchError` rather than being audited as returned. Other lazy results, such as sync generators and async iterator objects, are ordinary values recorded as returned when the call returns. Audit-sink failure before release prevents dispatch and closes the release
 as `not_dispatched`. Each allowed call writes two `executed=true` records, so count executions
 by filtering on `event`.
 
