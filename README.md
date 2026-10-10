@@ -380,10 +380,12 @@ The file holds `{"outcome": ..., "exit_code": ..., "reason": ...}`. `exit_code` 
 What the file does and does not promise:
 
 - **Integrity is a filesystem permission, not a boundary.** The command's output and exit status cannot alter the file. But with `--runtime local` the command runs as your user and can rewrite or delete any path you can, including from a background process that outlives the run. Put `PATH` where the command cannot write, or use `--runtime container`, where the command has no access to the host filesystem.
-- **A missing file means no outcome was published for this invocation.** It does not mean the command did not run. `guard` removes the file before it parses arguments and replaces it atomically through an exclusively created staging file, so a stale verdict from an earlier run is never left behind. Absence covers a crash, a kill or signal, a bad argument and a publish failure. Never treat a missing file as success.
+- **A missing file means no outcome was published for this invocation.** It does not mean the command did not run. Absence covers a crash, a kill or signal, a bad argument and a publish failure. Never treat a missing file as success.
+- **Stale files are not left behind, and unrelated files are never deleted.** Before parsing arguments, `guard` removes a file at `PATH` only if it is recognisably a guard outcome. Once arguments parse, it clears whatever is at `PATH`, as `>` would, and checks first that `PATH` is writable, so an unusable path fails before the command runs.
+- **The file is published atomically** through an exclusively created staging file and is readable only by its owner (mode `0600`).
 - **One `PATH` per invocation.** Concurrent runs sharing a path overwrite each other.
 - **Publish failure keeps the command's exit code** and prints `failed to publish outcome file` on stderr.
-- **`--outcome-file` may not be the `--audit` file.** The audit record (`--audit`) remains the durable alternative: a blocked call is `executed: false` with the matching `rule_id`, and a released-then-failed call is `executed: true` with a non-null `error`.
+- **`--outcome-file` may not be the `--audit` file**, compared by resolved path and by file identity so aliases and case-insensitive spellings are caught. The check runs before anything is cleared. The audit record (`--audit`) remains the durable alternative: a blocked call is `executed: false` with the matching `rule_id`, and a released-then-failed call is `executed: true` with a non-null `error`.
 - **`completed` means the sandbox backend returned a status.** Under `--runtime container`, a failure of the container engine's own exec step is reported with the engine's status; it is not distinguished from the command's.
 
 Two backends behind one interface:
