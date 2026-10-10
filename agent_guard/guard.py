@@ -26,6 +26,23 @@ ToolDispatch = Callable[[str, dict], Any]
 HumanApprover = Callable[["ApprovalRequest"], "ApprovalGrant | None"]
 
 
+class AwaitableDispatchError(TypeError):
+    """Dispatch returned an awaitable. `Guard.call` is synchronous and never awaits it, so an
+    audit record would otherwise attest a completed call for a tool that had not run.
+    `outcome_unknown` is False only when the awaitable was a coroutine that never started and
+    was closed; any other awaitable may already be executing."""
+
+    def __init__(self, tool: str, outcome_unknown: bool) -> None:
+        detail = (
+            "the awaitable may already be running; side-effect outcome unknown"
+            if outcome_unknown
+            else "the coroutine was closed without running"
+        )
+        super().__init__(f"dispatch for tool '{tool}' returned an awaitable that Guard.call does not await; {detail}")
+        self.tool = tool
+        self.outcome_unknown = outcome_unknown
+
+
 class BlockedError(Exception):
     def __init__(self, tool: str, reason: str) -> None:
         super().__init__(f"blocked tool call '{tool}': {reason}")
@@ -306,6 +323,8 @@ class Guard:
         audit_args = copy.deepcopy(call_args)
         try:
             result = dispatch(tool, call_args)
+            if inspect.isawaitable(result):
+                raise _awaitable_dispatch_error(tool, result)
         except Exception as err:
             audit_failure: BaseException | None = None
             try:
@@ -318,7 +337,7 @@ class Guard:
                     event="terminal",
                     call_id=call_id,
                     call_digest=digest,
-                    outcome="raised",
+                    outcome="unknown" if isinstance(err, AwaitableDispatchError) and err.outcome_unknown else "raised",
                 )
             except Exception as audit_err:
                 audit_failure = audit_err
@@ -440,6 +459,13 @@ def _bind_explicit_defaults(bound: inspect.BoundArguments) -> None:
     for param_name, param in bound.signature.parameters.items():
         if param_name not in bound.arguments and param.default is not inspect.Parameter.empty:
             bound.arguments[param_name] = param.default
+
+
+def _awaitable_dispatch_error(tool: str, awaitable: Any) -> AwaitableDispatchError:
+    never_started = inspect.iscoroutine(awaitable) and inspect.getcoroutinestate(awaitable) == inspect.CORO_CREATED
+    if never_started:
+        awaitable.close()
+    return AwaitableDispatchError(tool, outcome_unknown=not never_started)
 
 
 def _flatten_bound(bound: inspect.BoundArguments) -> dict[str, Any]:
