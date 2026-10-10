@@ -368,7 +368,14 @@ guard run --policy policy.example.yaml --audit run.jsonl -- ./do-thing.sh
 | `N` | the command's own non-zero exit status |
 | `128+N` | the command died on signal `N` (`137` for SIGKILL) |
 
-**`1`, `2` and `3` are ambiguous.** A command that itself exits `1`, `2` or `3` is indistinguishable, by exit code alone, from a usage error or spawn failure (`1`), a refusal (`2`), or a policy block (`3`). Scripts that need the distinction should read the audit record (`--audit`), where a blocked call is `executed: false` with the matching `rule_id`, and a released-then-failed call is `executed: true` with a non-null `error`. Moving `guard`'s own codes into a reserved high band would resolve this, but it is a breaking change to a documented CLI contract and is tracked separately in #47.
+**`1`, `2` and `3` are ambiguous.** A command that itself exits `1`, `2` or `3` is indistinguishable, by exit code alone, from a usage error or spawn failure (`1`), a refusal (`2`), or a policy block (`3`). The exit status is one channel shared by `guard` and the command it wraps, so no choice of numbers can separate them. Scripts that need the distinction should pass `--outcome-file PATH`, a channel the command cannot write to:
+
+```bash
+guard run --outcome-file outcome.json -- ./do-thing.sh
+jq -r .outcome outcome.json   # completed | blocked | refused | spawn_failed | usage_error
+```
+
+The file holds `{"outcome": ..., "exit_code": ..., "reason": ...}`. `exit_code` is the command's own status and is `null` unless the command ran. The file is deleted at startup and replaced atomically, so a missing file means `guard` reached no verdict (for example it crashed); never treat a missing file as success. The exit codes above are unchanged. The audit record (`--audit`) remains the durable alternative: a blocked call is `executed: false` with the matching `rule_id`, and a released-then-failed call is `executed: true` with a non-null `error`.
 
 Two backends behind one interface:
 - `--runtime local` (default) — in-process, runs on any laptop, zero cloud. The dev wedge.

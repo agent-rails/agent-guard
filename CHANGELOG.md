@@ -6,6 +6,7 @@ Notable changes. This project follows [Semantic Versioning](https://semver.org).
 
 ### Added
 
+- `guard run --outcome-file PATH` writes the run's verdict as JSON (`outcome` is `completed`, `blocked`, `refused`, `spawn_failed` or `usage_error`; `exit_code` is the command's own status, `null` unless it ran). Exit codes 2 and 3 collided with command statuses because `guard`'s verdict and the command's status shared one channel; the file is a channel the command cannot write to. It is deleted at startup and replaced atomically, so a missing file means no verdict was reached. Exit codes are unchanged.
 - `Guard.call()` and `@guarded` now write a call-bound release event before dispatch and a terminal event afterward. Both share a call ID and SHA-256 digest over the agent, trust tier, tool, arguments, and policy verdict. `unresolved_releases()` identifies retained release events without a matching terminal event. MCP result reconciliation remains outside this change because the proxy does not observe downstream outcomes.
 - Lifecycle fields are optional and excluded from the signed body when absent, preserving verification of existing per-record HMACs.
 - If persisting the release event fails, dispatch is not called and a best-effort terminal event with `outcome="not_dispatched"` and `executed=false` closes the release, so `unresolved_releases()` no longer reports a call that never ran. If that close-out write also fails, the release stays unresolved, which now means either possibly-applied or never dispatched.
