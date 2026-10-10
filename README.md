@@ -185,7 +185,9 @@ call ID and a SHA-256 digest binding the agent, trust tier, tool, arguments,
 and full policy verdict. Arguments are frozen into one canonical JSON form that the
 policy, approver, digest, audit record and tool all share, so they must be
 JSON-serializable; anything else is blocked and audited. `guarded()` binds positional
-arguments to parameter names and runs the function on the canonical copy. The release event is written before dispatch; the terminal
+arguments and default values to parameter names and runs the function on the canonical
+copy; it supports plain functions and static methods, not instance methods. Nesting is
+limited to 64 levels. The release event is written before dispatch; the terminal
 event records whether dispatch returned, raised, or ended with an unknown outcome. If a process
 dies after release, `unresolved_releases(records)` identifies the release with no
 terminal event. Audit-sink failure before release prevents dispatch and closes the release
