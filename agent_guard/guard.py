@@ -26,19 +26,22 @@ ToolDispatch = Callable[[str, dict], Any]
 HumanApprover = Callable[["ApprovalRequest"], "ApprovalGrant | None"]
 
 
-class AwaitableDispatchError(TypeError):
-    """Dispatch returned an awaitable. `Guard.call` is synchronous and never awaits it, so an
-    audit record would otherwise attest a completed call for a tool that had not run.
-    `outcome_unknown` is False only when the awaitable was a coroutine that never started and
-    was closed; any other awaitable may already be executing."""
+class AsyncDispatchError(TypeError):
+    """Dispatch returned an awaitable or an async iterator. `Guard.call` is synchronous and never
+    drives it, so an audit record would otherwise attest a completed call for a tool body that had
+    not run. `outcome_unknown` is False only when the result was a coroutine that never started and
+    was closed; anything else may already be executing or may run later."""
 
     def __init__(self, tool: str, outcome_unknown: bool) -> None:
         detail = (
-            "the awaitable may already be running; side-effect outcome unknown"
+            "it may already be running or run later; side-effect outcome unknown"
             if outcome_unknown
             else "the coroutine was closed without running"
         )
-        super().__init__(f"dispatch for tool '{tool}' returned an awaitable that Guard.call does not await; {detail}")
+        super().__init__(
+            f"dispatch for tool '{tool}' returned an async result (awaitable or async iterator) "
+            f"that Guard.call does not drive; {detail}"
+        )
         self.tool = tool
         self.outcome_unknown = outcome_unknown
 
@@ -323,8 +326,9 @@ class Guard:
         audit_args = copy.deepcopy(call_args)
         try:
             result = dispatch(tool, call_args)
-            if inspect.isawaitable(result):
-                raise _awaitable_dispatch_error(tool, result)
+            async_error = _async_dispatch_error(tool, result)
+            if async_error is not None:
+                raise async_error
         except Exception as err:
             audit_failure: BaseException | None = None
             try:
@@ -337,7 +341,7 @@ class Guard:
                     event="terminal",
                     call_id=call_id,
                     call_digest=digest,
-                    outcome="unknown" if isinstance(err, AwaitableDispatchError) and err.outcome_unknown else "raised",
+                    outcome="unknown" if isinstance(err, AsyncDispatchError) and err.outcome_unknown else "raised",
                 )
             except Exception as audit_err:
                 audit_failure = audit_err
@@ -461,11 +465,16 @@ def _bind_explicit_defaults(bound: inspect.BoundArguments) -> None:
             bound.arguments[param_name] = param.default
 
 
-def _awaitable_dispatch_error(tool: str, awaitable: Any) -> AwaitableDispatchError:
-    never_started = inspect.iscoroutine(awaitable) and inspect.getcoroutinestate(awaitable) == inspect.CORO_CREATED
-    if never_started:
-        awaitable.close()
-    return AwaitableDispatchError(tool, outcome_unknown=not never_started)
+def _async_dispatch_error(tool: str, result: Any) -> AsyncDispatchError | None:
+    try:
+        if not (inspect.isawaitable(result) or inspect.isasyncgen(result) or hasattr(type(result), "__anext__")):
+            return None
+        never_started = inspect.iscoroutine(result) and inspect.getcoroutinestate(result) == inspect.CORO_CREATED
+        if never_started:
+            result.close()
+        return AsyncDispatchError(tool, outcome_unknown=not never_started)
+    except Exception:  # noqa: BLE001 - the tool already returned; failing to classify its result must not read as a dispatch failure
+        return AsyncDispatchError(tool, outcome_unknown=True)
 
 
 def _flatten_bound(bound: inspect.BoundArguments) -> dict[str, Any]:
