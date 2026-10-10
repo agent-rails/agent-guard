@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
+import tempfile
+from contextlib import suppress
+from pathlib import Path
 
 from agent_guard import (
     TRUST_TIERS,
@@ -147,6 +151,95 @@ def _build_sandbox(args):
     return sandbox, sandbox.attest()
 
 
+OUTCOME_FIELDS = {"outcome", "exit_code", "reason"}
+OUTCOME_MAX_BYTES = 65536
+
+
+def _outcome_paths_from_argv(argv: list[str]) -> list[str]:
+    if not argv or argv[0] != "run":
+        return []
+    tokens = argv[1:]
+    paths: list[str] = []
+    for index, token in enumerate(tokens):
+        if token == "--":
+            break
+        if token == "--outcome-file" and index + 1 < len(tokens):
+            paths.append(tokens[index + 1])
+        elif token.startswith("--outcome-file="):
+            paths.append(token.split("=", 1)[1])
+    return paths
+
+
+def _is_guard_outcome(path: Path) -> bool:
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > OUTCOME_MAX_BYTES:
+            return False
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(payload, dict) and set(payload) == OUTCOME_FIELDS
+
+
+def _discard_stale_outcomes(argv: list[str]) -> None:
+    for candidate in _outcome_paths_from_argv(argv):
+        path = Path(candidate)
+        if _is_guard_outcome(path):
+            path.unlink(missing_ok=True)
+
+
+def _same_file(first: Path, second: Path) -> bool:
+    if first.resolve() == second.resolve():
+        return True
+    try:
+        return first.exists() and second.exists() and os.path.samefile(first, second)
+    except OSError:
+        return False
+
+
+def _prepare_outcome(outcome_file: str) -> None:
+    path = Path(outcome_file)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.unlink(missing_ok=True)
+    descriptor, probe = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".tmp")
+    os.close(descriptor)
+    Path(probe).unlink(missing_ok=True)
+
+
+def _finish(args, outcome: str, exit_code: int, *, command_status: int | None = None, reason: str | None = None) -> int:
+    """Publish the run's outcome to `--outcome-file` and return the process exit code.
+
+    The file is separate from the exit status and is written by guard only after the
+    command has exited, so the command's output and status cannot alter it. Its integrity
+    is the filesystem permission on PATH: under `--runtime local` the command runs as the
+    invoking user and can rewrite or delete any path that user can. Before the run, any
+    earlier file at PATH is removed once arguments parse, and before parsing only a file
+    that is recognisably a guard outcome is removed, so a stale verdict is not left behind
+    and a file that belongs to the command or to the audit log is never deleted. Publishing
+    replaces PATH atomically through an exclusively created staging file (mode 0600), so a
+    missing file means no outcome was published for this invocation. If publishing fails
+    the command's own exit code is kept and the failure is reported on stderr."""
+    if not args.outcome_file:
+        return exit_code
+    path = Path(args.outcome_file)
+    body = json.dumps({"outcome": outcome, "exit_code": command_status, "reason": reason}) + "\n"
+    staging: str | None = None
+    try:
+        descriptor, staging = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".tmp")
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(body)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(staging, path)
+        staging = None
+    except OSError as err:
+        print(f"failed to publish outcome file {path}: {err}", file=sys.stderr)
+    finally:
+        if staging is not None:
+            with suppress(OSError):
+                Path(staging).unlink(missing_ok=True)
+    return exit_code
+
+
 def _run(args) -> int:
     """Spawn a sandbox, mint a scoped identity, run one command through the guard.
 
@@ -158,10 +251,12 @@ def _run(args) -> int:
       N       the command's own non-zero exit status
       128+N   the command died on signal N (137 for SIGKILL, shell convention)
 
-    2 and 3 are ambiguous once child statuses propagate -- a command that itself
-    exits 2 or 3 is indistinguishable from a refusal or a block. Scripts that need
-    the distinction should read the audit record (`--audit`), where a blocked call
-    is `executed=false`, not the exit code.
+    Exit codes alone are ambiguous once child statuses propagate -- a command that
+    itself exits 2 or 3 is indistinguishable from a refusal or a block. With
+    `--outcome-file PATH`, guard writes {"outcome", "exit_code", "reason"} to PATH
+    (outcome is completed, blocked, refused, spawn_failed or usage_error; exit_code is
+    the command's status, null unless it ran). See `_finish` for the integrity and
+    absence semantics. The audit record (`--audit`) is the durable alternative.
 
     `subprocess.CalledProcessError` is caught specifically, not `Exception`: a
     guard-internal bug must keep tracebacking rather than turn into a silent exit
@@ -171,8 +266,9 @@ def _run(args) -> int:
     try:
         sandbox, attestation = _build_sandbox(args)
     except subprocess.CalledProcessError as err:
-        print(f"sandbox spawn failed: {(err.stderr or '').strip() or err}", file=sys.stderr)
-        return 1
+        reason = f"sandbox spawn failed: {(err.stderr or '').strip() or err}"
+        print(reason, file=sys.stderr)
+        return _finish(args, "spawn_failed", 1, reason=reason)
 
     allowlist = set(args.allow_digest)
     if args.dev_trust_runtime:
@@ -184,7 +280,7 @@ def _run(args) -> int:
     except RefusedError as err:
         print(f"refused: {err}", file=sys.stderr)
         sandbox.close()
-        return 2
+        return _finish(args, "refused", 2, reason=str(err))
 
     policy = load_policy(args.policy) if args.policy else _default_policy()
     audit = JsonlAuditSink(args.audit) if args.audit else MemoryAuditSink()
@@ -199,6 +295,8 @@ def _run(args) -> int:
     command = " ".join(args.command)
     print(f"[{token.agent_id} @ {token.trust_tier}] $ {command}", file=sys.stderr)
     exit_code = 0
+    outcome = "completed"
+    reason = None
     try:
         output = guard.wrap(sandbox.dispatch)("shell", {"cmd": command})
         if output:
@@ -206,6 +304,8 @@ def _run(args) -> int:
     except BlockedError as err:
         print(f"blocked: {err}", file=sys.stderr)
         exit_code = 3
+        outcome = "blocked"
+        reason = str(err)
     except subprocess.CalledProcessError as err:
         output = ((err.stdout or "") + (err.stderr or "")).strip()
         if output:
@@ -219,7 +319,9 @@ def _run(args) -> int:
         for record in audit.records:
             flag = "ran" if record.executed else "blocked"
             print(f"  [{flag}] {record.decision} :: {record.reason}", file=sys.stderr)
-    return exit_code
+    return _finish(
+        args, outcome, exit_code, command_status=exit_code if outcome == "completed" else None, reason=reason
+    )
 
 
 def _mcp(args) -> int:
@@ -598,7 +700,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="guard", description="Run a command in a governed sandbox.")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    run = sub.add_parser("run", help="run a command through the guard")
+    run = sub.add_parser("run", help="run a command through the guard", allow_abbrev=False)
     run.add_argument("--runtime", choices=["local", "container"], default="local")
     run.add_argument("--image", help="container image (container runtime only)")
     run.add_argument("--network", action="store_true", help="allow container network (default: none)")
@@ -611,6 +713,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--digest", default="dev", help="local runtime code digest")
     run.add_argument("--ttl", type=int, default=300)
     run.add_argument("--show-audit", action="store_true")
+    run.add_argument(
+        "--outcome-file",
+        help="write {outcome, exit_code, reason} as JSON here; absent means no outcome was published",
+    )
     run.add_argument("command", nargs=argparse.REMAINDER, help="-- command to run")
     run.set_defaults(func=_run)
 
@@ -711,16 +817,28 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _run_guard(args) -> int:
+    if args.outcome_file and args.audit and _same_file(Path(args.outcome_file), Path(args.audit)):
+        print("--outcome-file and --audit must be different files", file=sys.stderr)
+        return 1
+    if args.outcome_file:
+        try:
+            _prepare_outcome(args.outcome_file)
+        except OSError as err:
+            print(f"cannot use --outcome-file {args.outcome_file}: {err}", file=sys.stderr)
+            return 1
     command = [c for c in args.command if c != "--"]
     if not command:
-        print("nothing to run; usage: guard run -- <command>", file=sys.stderr)
-        return 1
+        reason = "nothing to run; usage: guard run -- <command>"
+        print(reason, file=sys.stderr)
+        return _finish(args, "usage_error", 1, reason=reason)
     args.command = command
     return _run(args)
 
 
 def main(argv=None) -> int:
-    args = build_parser().parse_args(argv)
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    _discard_stale_outcomes(arguments)
+    args = build_parser().parse_args(arguments)
     if args.func is _run:
         return _run_guard(args)
     return args.func(args)
