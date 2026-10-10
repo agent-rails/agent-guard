@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from contextlib import suppress
 from pathlib import Path
 
 from agent_guard import (
@@ -150,24 +151,58 @@ def _build_sandbox(args):
     return sandbox, sandbox.attest()
 
 
-def _outcome_path_from_argv(argv: list[str]) -> str | None:
+OUTCOME_FIELDS = {"outcome", "exit_code", "reason"}
+OUTCOME_MAX_BYTES = 65536
+
+
+def _outcome_paths_from_argv(argv: list[str]) -> list[str]:
     if not argv or argv[0] != "run":
-        return None
+        return []
     tokens = argv[1:]
+    paths: list[str] = []
     for index, token in enumerate(tokens):
         if token == "--":
-            return None
-        if token == "--outcome-file":
-            return tokens[index + 1] if index + 1 < len(tokens) else None
-        if token.startswith("--outcome-file="):
-            return token.split("=", 1)[1]
-    return None
+            break
+        if token == "--outcome-file" and index + 1 < len(tokens):
+            paths.append(tokens[index + 1])
+        elif token.startswith("--outcome-file="):
+            paths.append(token.split("=", 1)[1])
+    return paths
 
 
-def _clear_outcome(outcome_file: str) -> None:
+def _is_guard_outcome(path: Path) -> bool:
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > OUTCOME_MAX_BYTES:
+            return False
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(payload, dict) and set(payload) == OUTCOME_FIELDS
+
+
+def _discard_stale_outcomes(argv: list[str]) -> None:
+    for candidate in _outcome_paths_from_argv(argv):
+        path = Path(candidate)
+        if _is_guard_outcome(path):
+            path.unlink(missing_ok=True)
+
+
+def _same_file(first: Path, second: Path) -> bool:
+    if first.resolve() == second.resolve():
+        return True
+    try:
+        return first.exists() and second.exists() and os.path.samefile(first, second)
+    except OSError:
+        return False
+
+
+def _prepare_outcome(outcome_file: str) -> None:
     path = Path(outcome_file)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.unlink(missing_ok=True)
+    descriptor, probe = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".tmp")
+    os.close(descriptor)
+    Path(probe).unlink(missing_ok=True)
 
 
 def _finish(args, outcome: str, exit_code: int, *, command_status: int | None = None, reason: str | None = None) -> int:
@@ -176,10 +211,13 @@ def _finish(args, outcome: str, exit_code: int, *, command_status: int | None = 
     The file is separate from the exit status and is written by guard only after the
     command has exited, so the command's output and status cannot alter it. Its integrity
     is the filesystem permission on PATH: under `--runtime local` the command runs as the
-    invoking user and can rewrite or delete any path that user can. It is removed before
-    argument parsing and replaced atomically through an exclusively created staging file,
-    so a missing file means no outcome was published for this invocation. If publishing
-    fails the command's own exit code is kept and the failure is reported on stderr."""
+    invoking user and can rewrite or delete any path that user can. Before the run, any
+    earlier file at PATH is removed once arguments parse, and before parsing only a file
+    that is recognisably a guard outcome is removed, so a stale verdict is not left behind
+    and a file that belongs to the command or to the audit log is never deleted. Publishing
+    replaces PATH atomically through an exclusively created staging file (mode 0600), so a
+    missing file means no outcome was published for this invocation. If publishing fails
+    the command's own exit code is kept and the failure is reported on stderr."""
     if not args.outcome_file:
         return exit_code
     path = Path(args.outcome_file)
@@ -192,10 +230,13 @@ def _finish(args, outcome: str, exit_code: int, *, command_status: int | None = 
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(staging, path)
+        staging = None
     except OSError as err:
         print(f"failed to publish outcome file {path}: {err}", file=sys.stderr)
+    finally:
         if staging is not None:
-            Path(staging).unlink(missing_ok=True)
+            with suppress(OSError):
+                Path(staging).unlink(missing_ok=True)
     return exit_code
 
 
@@ -674,7 +715,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--show-audit", action="store_true")
     run.add_argument(
         "--outcome-file",
-        help="write the verdict (outcome, command exit status, reason) as JSON here; absent means no verdict",
+        help="write {outcome, exit_code, reason} as JSON here; absent means no outcome was published",
     )
     run.add_argument("command", nargs=argparse.REMAINDER, help="-- command to run")
     run.set_defaults(func=_run)
@@ -776,9 +817,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _run_guard(args) -> int:
-    if args.outcome_file and args.audit and Path(args.outcome_file).resolve() == Path(args.audit).resolve():
+    if args.outcome_file and args.audit and _same_file(Path(args.outcome_file), Path(args.audit)):
         print("--outcome-file and --audit must be different files", file=sys.stderr)
         return 1
+    if args.outcome_file:
+        try:
+            _prepare_outcome(args.outcome_file)
+        except OSError as err:
+            print(f"cannot use --outcome-file {args.outcome_file}: {err}", file=sys.stderr)
+            return 1
     command = [c for c in args.command if c != "--"]
     if not command:
         reason = "nothing to run; usage: guard run -- <command>"
@@ -790,13 +837,7 @@ def _run_guard(args) -> int:
 
 def main(argv=None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
-    outcome_file = _outcome_path_from_argv(arguments)
-    if outcome_file is not None:
-        try:
-            _clear_outcome(outcome_file)
-        except OSError as err:
-            print(f"cannot use --outcome-file {outcome_file}: {err}", file=sys.stderr)
-            return 1
+    _discard_stale_outcomes(arguments)
     args = build_parser().parse_args(arguments)
     if args.func is _run:
         return _run_guard(args)

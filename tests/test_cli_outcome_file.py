@@ -173,3 +173,92 @@ def test_unusable_outcome_path_fails_before_the_command_runs(tmp_path, capsys):
     assert code == 1
     assert "cannot use --outcome-file" in capsys.readouterr().err
     assert not marker.exists()
+
+
+def test_flag_text_inside_the_command_does_not_delete_the_commands_file(tmp_path):
+    precious = tmp_path / "important.txt"
+    precious.write_text("precious data")
+    main(["run", "--dev-trust-runtime", "cat", "--outcome-file", str(precious)])
+    assert precious.read_text() == "precious data"
+
+
+def test_flag_value_that_looks_like_an_option_does_not_delete_a_file_of_that_name(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    precious = tmp_path / "--audit"
+    precious.write_text("precious data")
+    with pytest.raises(SystemExit):
+        main(["run", "--outcome-file", "--audit", "x", "--ttl", "notanint", "--", "true"])
+    assert precious.read_text() == "precious data"
+
+
+def test_rejected_audit_collision_leaves_the_audit_log_intact(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    audit_log = tmp_path / "run.jsonl"
+    audit_log.write_text('{"agent_id": "a", "tool": "shell"}\n')
+    for outcome_spelling in ("run.jsonl", "./run.jsonl", "sub/../run.jsonl", str(audit_log)):
+        (tmp_path / "sub").mkdir(exist_ok=True)
+        code = main(
+            ["run", "--dev-trust-runtime", "--outcome-file", outcome_spelling, "--audit", "run.jsonl", "--", "true"]
+        )
+        assert code == 1
+        assert audit_log.read_text() == '{"agent_id": "a", "tool": "shell"}\n'
+
+
+def test_case_aliased_audit_path_is_rejected_on_case_insensitive_filesystems(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    audit_log = tmp_path / "run.jsonl"
+    audit_log.write_text('{"agent_id": "a"}\n')
+    if not (tmp_path / "RUN.JSONL").exists():
+        pytest.skip("filesystem is case sensitive")
+    code = main(["run", "--dev-trust-runtime", "--outcome-file", "RUN.JSONL", "--audit", "run.jsonl", "--", "true"])
+    assert code == 1
+    assert audit_log.read_text() == '{"agent_id": "a"}\n'
+
+
+def test_repeated_flag_leaves_no_stale_verdict_at_either_path(tmp_path):
+    first, second = tmp_path / "a.json", tmp_path / "b.json"
+    seed_stale_verdict(first)
+    seed_stale_verdict(second)
+    with pytest.raises(SystemExit):
+        main(["run", "--outcome-file", str(first), "--outcome-file", str(second), "--ttl", "notanint", "--", "true"])
+    assert not first.exists()
+    assert not second.exists()
+
+
+def test_file_that_is_not_a_guard_outcome_is_not_removed_before_parsing(tmp_path):
+    not_an_outcome = tmp_path / "data.json"
+    not_an_outcome.write_text(json.dumps({"outcome": "mine", "extra": 1}))
+    with pytest.raises(SystemExit):
+        main(["run", "--outcome-file", str(not_an_outcome), "--ttl", "notanint", "--", "true"])
+    assert json.loads(not_an_outcome.read_text()) == {"outcome": "mine", "extra": 1}
+
+
+def test_unwritable_parent_fails_before_the_command_runs_even_without_a_prior_file(tmp_path, capsys):
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    marker = tmp_path / "ran"
+    locked.chmod(0o555)
+    try:
+        code = main(["run", "--dev-trust-runtime", "--outcome-file", str(locked / "o.json"), "--", f"touch {marker}"])
+    finally:
+        locked.chmod(0o755)
+    assert code == 1
+    assert "cannot use --outcome-file" in capsys.readouterr().err
+    assert not marker.exists()
+
+
+def test_interrupted_publish_removes_the_staging_file(tmp_path, monkeypatch):
+    def interrupt(descriptor):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli.os, "fsync", interrupt)
+    outcome_path = tmp_path / "outcome.json"
+    with pytest.raises(KeyboardInterrupt):
+        main(["run", "--dev-trust-runtime", "--outcome-file", str(outcome_path), "--", "true"])
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_published_outcome_is_owner_only(tmp_path):
+    outcome_path = tmp_path / "outcome.json"
+    main(["run", "--dev-trust-runtime", "--outcome-file", str(outcome_path), "--", "true"])
+    assert outcome_path.stat().st_mode & 0o777 == 0o600
