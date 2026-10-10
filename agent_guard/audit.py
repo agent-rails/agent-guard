@@ -284,8 +284,10 @@ def unresolved_releases(records: Iterable[AuditRecord]) -> list[AuditRecord]:
         (record.call_id, record.call_digest)
         for record in materialized
         if record.event == "terminal"
-        and record.executed
-        and record.outcome in {"returned", "raised", "unknown"}
+        and (
+            (record.executed and record.outcome in {"returned", "raised", "unknown"})
+            or (not record.executed and record.outcome == "not_dispatched")
+        )
         and record.call_id
         and record.call_digest
     }

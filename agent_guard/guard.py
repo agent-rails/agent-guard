@@ -4,9 +4,11 @@ import copy
 import fnmatch
 import functools
 import hashlib
+import inspect
 import json
 import uuid
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -152,7 +154,11 @@ class Guard:
         proceed — after policy+judge resolve to allow, and (for `require_human`) only after a
         human actually approves — so a denied or rejected call never consumes velocity budget.
         """
-        return self._decide(tool, args, uuid.uuid4().hex)[:2]
+        try:
+            call_args = _canonical_args(args)
+        except _UNCANONICAL_ERRORS as err:
+            return False, _uncanonical_verdict(err)
+        return self._decide(tool, call_args, uuid.uuid4().hex)[:2]
 
     def _decide(
         self,
@@ -236,10 +242,22 @@ class Guard:
         )
 
     def call(self, dispatch: ToolDispatch, tool: str, args: dict[str, Any]) -> Any:
-        # Freeze the effective call at the boundary so a caller/approver cannot
-        # mutate arguments between authorization, approval and dispatch.
-        call_args = copy.deepcopy(args)
         call_id = uuid.uuid4().hex
+        try:
+            call_args = _canonical_args(args)
+        except _UNCANONICAL_ERRORS as err:
+            verdict = _uncanonical_verdict(err)
+            self.record(
+                tool,
+                {},
+                verdict,
+                executed=False,
+                event="decision",
+                call_id=call_id,
+                call_digest=_call_digest(self._agent_id, tool, {}, verdict, self._trust_tier),
+                outcome="blocked",
+            )
+            raise BlockedError(tool, verdict.reason) from err
         allowed, verdict, digest = self._decide(
             tool,
             call_args,
@@ -269,18 +287,20 @@ class Guard:
             reason = verdict.reason if verdict.decision is Decision.DENY else f"human approval denied: {verdict.reason}"
             raise BlockedError(tool, reason)
 
-        # Persist the call intent before releasing it. If the process dies during
-        # dispatch, this durable event remains as an unresolved release.
-        self.record(
-            tool,
-            copy.deepcopy(call_args),
-            verdict,
-            executed=True,
-            event="release",
-            call_id=call_id,
-            call_digest=digest,
-            outcome="pending",
-        )
+        try:
+            self.record(
+                tool,
+                copy.deepcopy(call_args),
+                verdict,
+                executed=True,
+                event="release",
+                call_id=call_id,
+                call_digest=digest,
+                outcome="pending",
+            )
+        except BaseException:
+            self._record_not_dispatched(tool, call_args, verdict, call_id, digest)
+            raise
         audit_args = copy.deepcopy(call_args)
         try:
             result = dispatch(tool, call_args)
@@ -298,6 +318,7 @@ class Guard:
                     outcome="raised",
                 )
             except Exception as audit_err:
+                _chain_audit_failure(err, audit_err)
                 raise err from audit_err
             raise
         except BaseException as err:
@@ -314,6 +335,7 @@ class Guard:
                     outcome="unknown",
                 )
             except BaseException as audit_err:
+                _chain_audit_failure(err, audit_err)
                 raise err from audit_err
             raise
         self.record(
@@ -327,6 +349,22 @@ class Guard:
             outcome="returned",
         )
         return result
+
+    def _record_not_dispatched(
+        self, tool: str, call_args: dict[str, Any], verdict: Verdict, call_id: str, digest: str
+    ) -> None:
+        with suppress(Exception):
+            self.record(
+                tool,
+                copy.deepcopy(call_args),
+                verdict,
+                executed=False,
+                error="release audit write failed; dispatch not called",
+                event="terminal",
+                call_id=call_id,
+                call_digest=digest,
+                outcome="not_dispatched",
+            )
 
     def _apply_velocity(self, tool: str, verdict: Verdict) -> tuple[bool, Verdict]:
         if self._velocity is None:
@@ -363,8 +401,11 @@ class Guard:
 
 
 def guarded(guard: Guard, tool_name: str | None = None) -> Callable:
-    """Decorator: protect a plain tool function. The function's keyword arguments are the
-    tool args the policy sees. Raises BlockedError if policy denies.
+    """Decorator: protect a plain tool function. Positional and keyword arguments are bound
+    to the function's parameter names; those named arguments are the tool args the policy
+    sees, the approver is shown, and the audit record carries. The function runs on the
+    canonical JSON copy of those arguments, not the caller's objects. Raises BlockedError
+    if policy denies or an argument is not JSON-serializable.
 
         @guarded(guard, "run_sql")
         def run_sql(query): ...
@@ -372,14 +413,69 @@ def guarded(guard: Guard, tool_name: str | None = None) -> Callable:
 
     def decorate(fn: Callable) -> Callable:
         name = tool_name or fn.__name__
+        signature = inspect.signature(fn)
 
         @functools.wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            return guard.call(lambda _tool, call_kwargs: fn(*args, **call_kwargs), name, kwargs)
+            bound = signature.bind(*args, **kwargs)
+            return guard.call(_dispatch_bound(fn, bound), name, _flatten_bound(bound))
 
         return wrapper
 
     return decorate
+
+
+def _flatten_bound(bound: inspect.BoundArguments) -> dict[str, Any]:
+    flat: dict[str, Any] = {}
+    for param_name, value in bound.arguments.items():
+        if bound.signature.parameters[param_name].kind is not inspect.Parameter.VAR_KEYWORD:
+            flat[param_name] = value
+            continue
+        shadowed = flat.keys() & value.keys()
+        if shadowed:
+            raise TypeError(f"keyword arguments {sorted(shadowed)} collide with named parameters")
+        flat.update(value)
+    return flat
+
+
+def _dispatch_bound(fn: Callable, bound: inspect.BoundArguments) -> ToolDispatch:
+    var_keyword = next(
+        (n for n, p in bound.signature.parameters.items() if p.kind is inspect.Parameter.VAR_KEYWORD), None
+    )
+
+    def dispatch(_tool: str, call_args: dict[str, Any]) -> Any:
+        arguments = {n: call_args[n] for n in bound.arguments if n != var_keyword}
+        if var_keyword in bound.arguments:
+            arguments[var_keyword] = {key: call_args[key] for key in bound.arguments[var_keyword]}
+        bound.arguments = arguments
+        return fn(*bound.args, **bound.kwargs)
+
+    return dispatch
+
+
+_UNCANONICAL_ERRORS = (TypeError, ValueError, RecursionError)
+
+
+def _uncanonical_verdict(err: Exception) -> Verdict:
+    return Verdict(
+        decision=Decision.DENY,
+        reason=f"arguments are not canonical JSON; fail-closed to deny: {err}",
+        rule_id="args-not-canonical",
+    )
+
+
+def _canonical_json(value: Any) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")
+
+
+def _canonical_args(args: dict[str, Any]) -> dict[str, Any]:
+    return json.loads(_canonical_json(args))
+
+
+def _chain_audit_failure(err: BaseException, audit_err: BaseException) -> None:
+    if audit_err.__cause__ is None:
+        audit_err.__cause__ = err.__cause__
+    err.__cause__ = audit_err
 
 
 def _call_digest(agent_id: str, tool: str, args: dict[str, Any], verdict: Verdict, trust_tier: str) -> str:
@@ -398,7 +494,4 @@ def _call_digest(agent_id: str, tool: str, args: dict[str, Any], verdict: Verdic
             "judge_ceiling": verdict.judge_ceiling.value,
         },
     }
-    canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode(
-        "utf-8"
-    )
-    return hashlib.sha256(canonical).hexdigest()
+    return hashlib.sha256(_canonical_json(body)).hexdigest()
