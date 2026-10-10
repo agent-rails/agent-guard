@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 from agent_guard import (
     TRUST_TIERS,
@@ -147,6 +149,30 @@ def _build_sandbox(args):
     return sandbox, sandbox.attest()
 
 
+def _clear_outcome(args) -> None:
+    if not args.outcome_file:
+        return
+    path = Path(args.outcome_file)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.unlink(missing_ok=True)
+
+
+def _finish(args, outcome: str, exit_code: int, *, command_status: int | None = None, reason: str | None = None) -> int:
+    """Report the verdict out of band and return the process exit code.
+
+    The file is the one channel the wrapped command cannot write to. It is removed at
+    startup and replaced atomically, so a missing file means no verdict was reached."""
+    if not args.outcome_file:
+        return exit_code
+    path = Path(args.outcome_file)
+    staging = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    staging.write_text(
+        json.dumps({"outcome": outcome, "exit_code": command_status, "reason": reason}) + "\n", encoding="utf-8"
+    )
+    os.replace(staging, path)
+    return exit_code
+
+
 def _run(args) -> int:
     """Spawn a sandbox, mint a scoped identity, run one command through the guard.
 
@@ -158,10 +184,13 @@ def _run(args) -> int:
       N       the command's own non-zero exit status
       128+N   the command died on signal N (137 for SIGKILL, shell convention)
 
-    2 and 3 are ambiguous once child statuses propagate -- a command that itself
-    exits 2 or 3 is indistinguishable from a refusal or a block. Scripts that need
-    the distinction should read the audit record (`--audit`), where a blocked call
-    is `executed=false`, not the exit code.
+    Exit codes alone are ambiguous once child statuses propagate -- a command that
+    itself exits 2 or 3 is indistinguishable from a refusal or a block. With
+    `--outcome-file PATH`, guard writes {"outcome", "exit_code", "reason"} to PATH
+    (outcome is completed, blocked, refused, spawn_failed or usage_error; exit_code is
+    the command's status, null unless it ran). The file is removed at startup and
+    replaced atomically, so its absence means no verdict was reached. The audit
+    record (`--audit`) is the durable alternative.
 
     `subprocess.CalledProcessError` is caught specifically, not `Exception`: a
     guard-internal bug must keep tracebacking rather than turn into a silent exit
@@ -171,8 +200,9 @@ def _run(args) -> int:
     try:
         sandbox, attestation = _build_sandbox(args)
     except subprocess.CalledProcessError as err:
-        print(f"sandbox spawn failed: {(err.stderr or '').strip() or err}", file=sys.stderr)
-        return 1
+        reason = f"sandbox spawn failed: {(err.stderr or '').strip() or err}"
+        print(reason, file=sys.stderr)
+        return _finish(args, "spawn_failed", 1, reason=reason)
 
     allowlist = set(args.allow_digest)
     if args.dev_trust_runtime:
@@ -184,7 +214,7 @@ def _run(args) -> int:
     except RefusedError as err:
         print(f"refused: {err}", file=sys.stderr)
         sandbox.close()
-        return 2
+        return _finish(args, "refused", 2, reason=str(err))
 
     policy = load_policy(args.policy) if args.policy else _default_policy()
     audit = JsonlAuditSink(args.audit) if args.audit else MemoryAuditSink()
@@ -199,6 +229,8 @@ def _run(args) -> int:
     command = " ".join(args.command)
     print(f"[{token.agent_id} @ {token.trust_tier}] $ {command}", file=sys.stderr)
     exit_code = 0
+    outcome = "completed"
+    reason = None
     try:
         output = guard.wrap(sandbox.dispatch)("shell", {"cmd": command})
         if output:
@@ -206,6 +238,8 @@ def _run(args) -> int:
     except BlockedError as err:
         print(f"blocked: {err}", file=sys.stderr)
         exit_code = 3
+        outcome = "blocked"
+        reason = str(err)
     except subprocess.CalledProcessError as err:
         output = ((err.stdout or "") + (err.stderr or "")).strip()
         if output:
@@ -219,7 +253,9 @@ def _run(args) -> int:
         for record in audit.records:
             flag = "ran" if record.executed else "blocked"
             print(f"  [{flag}] {record.decision} :: {record.reason}", file=sys.stderr)
-    return exit_code
+    return _finish(
+        args, outcome, exit_code, command_status=exit_code if outcome == "completed" else None, reason=reason
+    )
 
 
 def _mcp(args) -> int:
@@ -611,6 +647,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--digest", default="dev", help="local runtime code digest")
     run.add_argument("--ttl", type=int, default=300)
     run.add_argument("--show-audit", action="store_true")
+    run.add_argument(
+        "--outcome-file",
+        help="write the verdict (outcome, command exit status, reason) as JSON here; absent means no verdict",
+    )
     run.add_argument("command", nargs=argparse.REMAINDER, help="-- command to run")
     run.set_defaults(func=_run)
 
@@ -711,10 +751,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _run_guard(args) -> int:
+    _clear_outcome(args)
     command = [c for c in args.command if c != "--"]
     if not command:
-        print("nothing to run; usage: guard run -- <command>", file=sys.stderr)
-        return 1
+        reason = "nothing to run; usage: guard run -- <command>"
+        print(reason, file=sys.stderr)
+        return _finish(args, "usage_error", 1, reason=reason)
     args.command = command
     return _run(args)
 
