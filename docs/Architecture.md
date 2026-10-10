@@ -86,7 +86,7 @@ sequenceDiagram
     end
 ```
 
-The `call_digest` binds agent ID, tool, exact arguments, and the policy verdict. A
+The `call_digest` binds agent ID, tool, canonical JSON arguments, and the policy verdict. A
 release without a terminal event is visible to `unresolved_releases()` when the
 release record remains in the supplied stream.
 

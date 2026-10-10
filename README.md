@@ -181,11 +181,16 @@ Shows a benign query allowed, a `DROP TABLE` blocked, a `git push --force` gated
 ## Approval and call outcomes
 
 For `Guard.call()` and the `guarded()` decorator, approval requests include a unique
-call ID and a SHA-256 digest binding the agent, trust tier, tool, exact arguments,
-and full policy verdict. The release event is written before dispatch; the terminal
+call ID and a SHA-256 digest binding the agent, trust tier, tool, arguments,
+and full policy verdict. Arguments are frozen into one canonical JSON form that the
+policy, approver, digest, audit record and tool all share, so they must be
+JSON-serializable; anything else is blocked and audited. `guarded()` binds positional
+arguments to parameter names and runs the function on the canonical copy. The release event is written before dispatch; the terminal
 event records whether dispatch returned, raised, or ended with an unknown outcome. If a process
 dies after release, `unresolved_releases(records)` identifies the release with no
-terminal event. Audit-sink failure before release prevents dispatch.
+terminal event. Audit-sink failure before release prevents dispatch and closes the release
+as `not_dispatched`. Each allowed call writes two `executed=true` records, so count executions
+by filtering on `event`.
 
 An approver must return an `ApprovalGrant` with the same call ID and digest;
 plain `True` values and stale grants fail closed.
