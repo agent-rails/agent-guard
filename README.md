@@ -368,14 +368,23 @@ guard run --policy policy.example.yaml --audit run.jsonl -- ./do-thing.sh
 | `N` | the command's own non-zero exit status |
 | `128+N` | the command died on signal `N` (`137` for SIGKILL) |
 
-**`1`, `2` and `3` are ambiguous.** A command that itself exits `1`, `2` or `3` is indistinguishable, by exit code alone, from a usage error or spawn failure (`1`), a refusal (`2`), or a policy block (`3`). The exit status is one channel shared by `guard` and the command it wraps, so no choice of numbers can separate them. Scripts that need the distinction should pass `--outcome-file PATH`, a channel the command cannot write to:
+**`1`, `2` and `3` are ambiguous.** A command that itself exits `1`, `2` or `3` is indistinguishable, by exit code alone, from a usage error or spawn failure (`1`), a refusal (`2`), or a policy block (`3`). The exit status is one channel shared by `guard` and the command it wraps, so no choice of numbers can separate them. Scripts that need the distinction should pass `--outcome-file PATH`, a separate channel that `guard` writes only after the command has exited:
 
 ```bash
 guard run --outcome-file outcome.json -- ./do-thing.sh
 jq -r .outcome outcome.json   # completed | blocked | refused | spawn_failed | usage_error
 ```
 
-The file holds `{"outcome": ..., "exit_code": ..., "reason": ...}`. `exit_code` is the command's own status and is `null` unless the command ran. The file is deleted at startup and replaced atomically, so a missing file means `guard` reached no verdict (for example it crashed); never treat a missing file as success. The exit codes above are unchanged. The audit record (`--audit`) remains the durable alternative: a blocked call is `executed: false` with the matching `rule_id`, and a released-then-failed call is `executed: true` with a non-null `error`.
+The file holds `{"outcome": ..., "exit_code": ..., "reason": ...}`. `exit_code` is the command's own status and is `null` unless the command ran. The exit codes above are unchanged.
+
+What the file does and does not promise:
+
+- **Integrity is a filesystem permission, not a boundary.** The command's output and exit status cannot alter the file. But with `--runtime local` the command runs as your user and can rewrite or delete any path you can, including from a background process that outlives the run. Put `PATH` where the command cannot write, or use `--runtime container`, where the command has no access to the host filesystem.
+- **A missing file means no outcome was published for this invocation.** It does not mean the command did not run. `guard` removes the file before it parses arguments and replaces it atomically through an exclusively created staging file, so a stale verdict from an earlier run is never left behind. Absence covers a crash, a kill or signal, a bad argument and a publish failure. Never treat a missing file as success.
+- **One `PATH` per invocation.** Concurrent runs sharing a path overwrite each other.
+- **Publish failure keeps the command's exit code** and prints `failed to publish outcome file` on stderr.
+- **`--outcome-file` may not be the `--audit` file.** The audit record (`--audit`) remains the durable alternative: a blocked call is `executed: false` with the matching `rule_id`, and a released-then-failed call is `executed: true` with a non-null `error`.
+- **`completed` means the sandbox backend returned a status.** Under `--runtime container`, a failure of the container engine's own exec step is reported with the engine's status; it is not distinguished from the command's.
 
 Two backends behind one interface:
 - `--runtime local` (default) — in-process, runs on any laptop, zero cloud. The dev wedge.
