@@ -19,14 +19,14 @@ def run_with_outcome(tmp_path, *argv: str, trust: bool = True):
 
 
 def test_clean_command_reports_completed_with_status_zero(tmp_path):
-    code, outcome, _ = run_with_outcome(tmp_path, "echo hi")
+    code, outcome, _ = run_with_outcome(tmp_path, "echo", "hi")
     assert code == 0
     assert outcome == {"outcome": "completed", "exit_code": 0, "reason": None}
 
 
 @pytest.mark.parametrize("status", [2, 3])
 def test_command_exiting_with_a_guard_code_is_distinguishable_from_a_verdict(tmp_path, status):
-    code, outcome, _ = run_with_outcome(tmp_path, f"exit {status}")
+    code, outcome, _ = run_with_outcome(tmp_path, "sh", "-c", f"exit {status}")
     assert code == status
     assert outcome == {"outcome": "completed", "exit_code": status, "reason": None}
 
@@ -53,7 +53,7 @@ def test_empty_command_reports_usage_error(tmp_path):
 
 
 def test_signal_death_reports_the_shell_convention_status(tmp_path):
-    code, outcome, _ = run_with_outcome(tmp_path, "kill -9 $$")
+    code, outcome, _ = run_with_outcome(tmp_path, "sh", "-c", "kill -9 $$")
     assert code == 137
     assert outcome == {"outcome": "completed", "exit_code": 137, "reason": None}
 
@@ -85,7 +85,7 @@ def test_outcome_write_leaves_no_staging_file(tmp_path):
 
 def test_without_the_flag_no_file_is_written_and_exit_codes_are_unchanged(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    assert main(["run", "--dev-trust-runtime", "--", "exit 3"]) == 3
+    assert main(["run", "--dev-trust-runtime", "--", "sh", "-c", "exit 3"]) == 3
     assert list(tmp_path.iterdir()) == []
 
 
@@ -128,7 +128,16 @@ def test_publish_failure_keeps_the_commands_exit_status_and_cleans_up(tmp_path, 
     outcome_path = locked / "outcome.json"
     try:
         code = main(
-            ["run", "--dev-trust-runtime", "--outcome-file", str(outcome_path), "--", f"chmod 555 {locked}; exit 5"]
+            [
+                "run",
+                "--dev-trust-runtime",
+                "--outcome-file",
+                str(outcome_path),
+                "--",
+                "sh",
+                "-c",
+                f"chmod 555 {locked}; exit 5",
+            ]
         )
     finally:
         locked.chmod(0o755)
@@ -140,7 +149,16 @@ def test_publish_failure_keeps_the_commands_exit_status_and_cleans_up(tmp_path, 
 def test_path_turned_into_a_directory_by_the_command_is_reported_without_leftovers(tmp_path, capsys):
     outcome_path = tmp_path / "outcome.json"
     code = main(
-        ["run", "--dev-trust-runtime", "--outcome-file", str(outcome_path), "--", f"mkdir {outcome_path}; exit 5"]
+        [
+            "run",
+            "--dev-trust-runtime",
+            "--outcome-file",
+            str(outcome_path),
+            "--",
+            "sh",
+            "-c",
+            f"mkdir {outcome_path}; exit 5",
+        ]
     )
     assert code == 5
     assert "failed to publish outcome file" in capsys.readouterr().err
@@ -152,7 +170,7 @@ def test_command_cannot_redirect_the_write_through_a_predictable_staging_name(tm
     victim.write_text("original")
     outcome_path = tmp_path / "outcome.json"
     plant = f"ln -s {victim} {outcome_path}.$PPID.tmp"
-    assert main(["run", "--dev-trust-runtime", "--outcome-file", str(outcome_path), "--", plant]) == 0
+    assert main(["run", "--dev-trust-runtime", "--outcome-file", str(outcome_path), "--", "sh", "-c", plant]) == 0
     assert victim.read_text() == "original"
     assert json.loads(outcome_path.read_text())["outcome"] == "completed"
 
