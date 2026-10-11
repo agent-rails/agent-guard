@@ -4,10 +4,12 @@ import base64
 import hashlib
 import hmac
 import json
+from unittest.mock import patch
 
 import pytest
 
-from agent_guard import Guard, MemoryAuditSink, Policy
+from agent_guard import BlockedError, Guard, MemoryAuditSink, Policy
+from agent_guard.guard import ApprovalGrant
 from agentguard_identity import (
     Attestation,
     AttestationResult,
@@ -106,6 +108,53 @@ def test_expired_token_is_rejected():
     encoded = sign(token, b"k")
     with pytest.raises(ValueError):
         verify(encoded, b"k", now=2000.0)
+
+
+def test_existing_token_bound_guard_blocks_after_expiry():
+    token = Token(
+        subject="human:x",
+        agent_id="agent:s1",
+        sandbox_id="s1",
+        trust_tier="local.process",
+        scopes=("shell",),
+        exp=1001.0,
+    )
+    audit = MemoryAuditSink()
+    guard = Guard.from_token(
+        sign(token, b"k"), b"k", Policy.from_dict({"default": "allow", "rules": []}), audit, now=1000.0
+    )
+    dispatched = []
+    with patch("time.time", return_value=1002.0):
+        with pytest.raises(BlockedError, match="expired"):
+            guard.call(lambda tool, args: dispatched.append(tool), "shell", {"cmd": "fixture"})
+    assert dispatched == []
+    assert audit.records[-1].executed is False
+
+
+def test_token_expiry_during_approval_blocks_dispatch():
+    token = Token(
+        subject="human:x",
+        agent_id="agent:s1",
+        sandbox_id="s1",
+        trust_tier="local.process",
+        scopes=("shell",),
+        exp=1001.0,
+    )
+    clock = [1000.0]
+
+    def approve(request):
+        clock[0] = 1002.0
+        return ApprovalGrant(request.call_id, request.call_digest)
+
+    policy = Policy.from_dict(
+        {"default": "deny", "rules": [{"id": "approval", "decision": "require_human", "tools": ["shell"]}]}
+    )
+    guard = Guard.from_token(sign(token, b"k"), b"k", policy, MemoryAuditSink(), approver=approve, now=1000.0)
+    dispatched = []
+    with patch("time.time", side_effect=lambda: clock[0]):
+        with pytest.raises(BlockedError, match="expired"):
+            guard.call(lambda tool, args: dispatched.append(tool), "shell", {"cmd": "fixture"})
+    assert dispatched == []
 
 
 def signed_payload(payload) -> str:

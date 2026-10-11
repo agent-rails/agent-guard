@@ -28,7 +28,7 @@ What agent-guard defends against, per pillar, framed as Prevent / Contain / Dete
 
 **Contain:**
 - Scopes are `human_grant ∩ task_scope` — an agent's authority is capped at the intersection the human explicitly granted for the task, not everything the human could do.
-- Tokens are short-lived (TTL-bound); revocation is TTL + a denylist, no long tail.
+- Tokens are short-lived (TTL-bound). Guards built from verified tokens, and the trusted local `guard run` mint, recheck expiry for each new call and after an approval wait. Expiry does not interrupt a call already released to a tool. Revocation is TTL + a denylist, no long tail.
 
 **Detect:** every decision an identity authorizes is attributed in the audit trail to `agent_id`/`sandbox_id`.
 

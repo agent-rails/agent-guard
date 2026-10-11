@@ -357,6 +357,8 @@ guard run --dev-trust-runtime -- git push --force      # gated: prompts a human
 guard run --policy policy.example.yaml --audit run.jsonl -- ./do-thing.sh
 ```
 
+The default `guard run` grant is `shell`, matching the one tool it dispatches. An explicit `--scope` list replaces that default; for example, `--scope read` blocks shell dispatch even if policy would otherwise allow it. `--ttl` limits how long the minted identity can authorize calls, including an already-constructed guard. The CLI's trusted local mint passes the token's scopes and expiry to its guard; callers handling an encoded token should use `Guard.from_token` to verify its signature and bind those claims.
+
 `guard run` is a wrapper, so it is transparent about the command's own result — the command's exit status propagates, and a signal maps to `128 + N` the way a shell reports it:
 
 | Exit | Meaning |
@@ -364,7 +366,7 @@ guard run --policy policy.example.yaml --audit run.jsonl -- ./do-thing.sh
 | `0` | the command ran and exited 0 |
 | `1` | usage error (no command given), or the sandbox failed to spawn |
 | `2` | refused — the runtime's code digest is not allowlisted |
-| `3` | blocked by policy |
+| `3` | blocked by policy, scope, or token expiry |
 | `N` | the command's own non-zero exit status |
 | `128+N` | the command died on signal `N` (`137` for SIGKILL) |
 
@@ -392,7 +394,7 @@ python examples/end_to_end.py
 
 It spawns a local sandbox, attests it, mints an identity whose scopes are `human_grant ∩ task_scope`, then shows a read allowed, a `DROP TABLE` denied, and a `prod_write` blocked because a `local.container` identity is below the `remote.microvm` tier the policy requires — a local agent cannot self-elevate.
 
-Note the composition: the token is signed (`sign(token, secret)`) and the guard is built via `Guard.from_token(encoded, secret, ...)`, which re-verifies the signature rather than trusting `agent_id`/`trust_tier` as caller-supplied strings. The plain `Guard(...)` constructor still exists for local/no-identity use, but once a `Broker` is in the picture, `from_token` is the only path `min_trust_tier` rules should be relied on against.
+Note the composition: the token is signed (`sign(token, secret)`) and the guard is built via `Guard.from_token(encoded, secret, ...)`, which re-verifies the signature and binds expiry and scopes rather than trusting those claims as caller-supplied values. The plain `Guard(...)` constructor still exists for local/no-identity use, but once an encoded token crosses a trust boundary, `from_token` is the path for verifying its authority. A bound guard rejects new calls after expiry; a call already released to a tool is not interrupted when its token expires.
 
 The block boundary is deliberate and asymmetric: `agentguard_identity` has zero dependency on `agent_guard`; `agent_guard` depends on identity only through verification (`from_token`, PoP), never the reverse. Identity says *who/where*, the guard says *what*, the audit sink says *did*. See `docs/DESIGN-runtime-identity-binding.md` for the local-and-remote design and the honest trust gradient.
 
