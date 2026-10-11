@@ -154,7 +154,7 @@ def _run(args) -> int:
       0       the command ran and exited 0
       1       usage error, or the sandbox failed to spawn
       2       refused (attestation not allowlisted)
-      3       blocked by policy
+      3       blocked by policy, scope, or token expiry
       N       the command's own non-zero exit status
       128+N   the command died on signal N (137 for SIGKILL, shell convention)
 
@@ -194,6 +194,8 @@ def _run(args) -> int:
         agent_id=token.agent_id,
         trust_tier=token.trust_tier,
         approver=_tty_approver,
+        scopes=token.scopes,
+        expires_at=token.exp,
     )
 
     command = " ".join(args.command)
@@ -235,7 +237,7 @@ def _mcp(args) -> int:
 
 def broker_mint(attestor, attestation, args):
     secret = os.urandom(32)
-    grant = set(args.scope)
+    grant = set(args.scope) if args.scope else {"shell"}
     return Broker(secret=secret, ttl_seconds=args.ttl).mint(
         attestor, attestation, subject=args.subject, human_grant=grant, task_scope=grant
     )
@@ -605,7 +607,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--policy", help="policy file (yaml/json); default blocks rm -rf / drop table, gates force-push")
     run.add_argument("--audit", help="append audit records to this JSONL file")
     run.add_argument("--subject", default=f"human:{os.environ.get('USER', 'unknown')}")
-    run.add_argument("--scope", action="append", default=[], help="granted scope (repeatable)")
+    run.add_argument("--scope", action="append", default=[], help="granted tool scope (repeatable; default: shell)")
     run.add_argument("--allow-digest", action="append", default=[], help="allowlisted code digest (repeatable)")
     run.add_argument("--dev-trust-runtime", action="store_true", help="dev: trust the spawned runtime's digest")
     run.add_argument("--digest", default="dev", help="local runtime code digest")

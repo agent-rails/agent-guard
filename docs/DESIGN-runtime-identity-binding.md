@@ -46,9 +46,11 @@ class Sandbox(Protocol):
     def close(self) -> None: ...  # ephemeral: credential dies here
 ```
 
-Backends:
-- LocalRuntime — subprocess, or local container (Docker/Podman), or local microVM. Zero cloud dependency. For dev, air-gapped, and low-trust workloads.
-- RemoteRuntime — E2B / Daytona / Modal / Firecracker microVM. For production and higher-trust workloads.
+Current backends:
+- `LocalRuntime` — an in-process tool function, attested only as `local.process`. For trusted local development and unit tests.
+- `ContainerRuntime` — Docker/Podman container, or Docker with gVisor when `runsc` is explicitly available. Container-tier claims come from this backend, not a caller-supplied `RuntimeSpec.kind`.
+
+Proposed backend: a remote or microVM runtime with platform-backed attestation. It is not shipped here.
 
 Do NOT build the sandbox tech. Build the binding on top of existing runtimes.
 
@@ -85,7 +87,7 @@ class AttestationResult:
     claims: dict  # what the broker may mint into the token
 ```
 
-- Local: `evidence` is process/container metadata. Verified against a local expected-digest allowlist. Trust tier capped at `local.*`.
+- Local: `evidence` is process/container metadata checked against a local expected-digest allowlist. `LocalRuntime` itself claims only `local.process`; a container tier requires `ContainerRuntime`. This local attestor trusts the producer supplying the attestation and is not a cryptographic proof against a compromised caller.
 - Remote: `evidence` includes the platform's signed attestation (or a TEE quote for microVM+HW). Verified against the platform's key / a TEE root. Higher trust tier unlocked.
 
 Fail-closed: unverifiable attestation → no token minted → the agent runs with zero authority (or is refused). Never mint on unverified evidence.

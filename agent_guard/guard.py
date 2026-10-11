@@ -6,6 +6,7 @@ import functools
 import hashlib
 import inspect
 import json
+import time
 import uuid
 from collections.abc import Callable
 from contextlib import suppress
@@ -77,6 +78,7 @@ class Guard:
         judge: Judge | None = None,
         scopes: tuple[str, ...] | None = None,
         velocity: VelocityLimiter | None = None,
+        expires_at: float | None = None,
     ) -> None:
         self._policy = policy
         self._audit = audit
@@ -86,6 +88,7 @@ class Guard:
         self._judge = judge
         self._scopes = scopes
         self._velocity = velocity
+        self._expires_at = expires_at
 
     @classmethod
     def from_token(
@@ -135,6 +138,7 @@ class Guard:
             judge=judge,
             scopes=token.scopes,
             velocity=velocity,
+            expires_at=token.exp,
         )
 
     def wrap(self, dispatch: ToolDispatch) -> ToolDispatch:
@@ -167,6 +171,9 @@ class Guard:
         call_id: str,
         before_approval: Callable[[Verdict, str], None] | None = None,
     ) -> tuple[bool, Verdict, str]:
+        expired = self._expired_verdict()
+        if expired is not None:
+            return False, expired, _call_digest(self._agent_id, tool, args, expired, self._trust_tier)
         if self._scopes is not None and not any(fnmatch.fnmatch(tool, scope) for scope in self._scopes):
             verdict = Verdict(
                 decision=Decision.DENY,
@@ -200,6 +207,9 @@ class Guard:
                 self._trust_tier,
             )
             approval = self._approver(request)
+            expired = self._expired_verdict()
+            if expired is not None:
+                return False, expired, _call_digest(self._agent_id, tool, args, expired, self._trust_tier)
             if _call_digest(self._agent_id, tool, approval_args, verdict, self._trust_tier) != digest:
                 return False, replace(verdict, reason="approval request arguments changed; fail-closed to deny"), digest
             if not isinstance(approval, ApprovalGrant) or approval.call_id != call_id or approval.call_digest != digest:
@@ -212,6 +222,11 @@ class Guard:
         if not allowed:
             digest = _call_digest(self._agent_id, tool, args, final_verdict, self._trust_tier)
         return allowed, final_verdict, digest
+
+    def _expired_verdict(self) -> Verdict | None:
+        if self._expires_at is not None and time.time() >= self._expires_at:
+            return Verdict(Decision.DENY, "token expired", rule_id="token-expired")
+        return None
 
     def record(
         self,
@@ -275,6 +290,11 @@ class Guard:
                 outcome="approval_requested",
             ),
         )
+        if allowed:
+            expired = self._expired_verdict()
+            if expired is not None:
+                allowed, verdict = False, expired
+                digest = _call_digest(self._agent_id, tool, call_args, verdict, self._trust_tier)
         if not allowed:
             self.record(
                 tool,

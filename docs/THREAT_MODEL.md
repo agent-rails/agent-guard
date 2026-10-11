@@ -28,7 +28,7 @@ What agent-guard defends against, per pillar, framed as Prevent / Contain / Dete
 
 **Contain:**
 - Scopes are `human_grant ∩ task_scope` — an agent's authority is capped at the intersection the human explicitly granted for the task, not everything the human could do.
-- Tokens are short-lived (TTL-bound); revocation is TTL + a denylist, no long tail.
+- Tokens are short-lived (TTL-bound). Guards built from verified tokens, and the trusted local `guard run` mint, recheck expiry for each new call and after an approval wait. Expiry does not interrupt a call already released to a tool. Revocation is TTL + a denylist, no long tail.
 
 **Detect:** every decision an identity authorizes is attributed in the audit trail to `agent_id`/`sandbox_id`.
 
@@ -88,6 +88,8 @@ This is why the shipped tool functions raise: `agent_guard.cli._shell` runs with
 ## Pillar 4 — Isolation (runtime tiers)
 
 **Prevent:** claiming an isolation tier stronger than what actually ran. `ContainerRuntime.spawn` raises rather than silently falling back to `runc` when `gVisor` was requested but unavailable — claiming isolation it didn't provide is treated as a bug, not a convenience.
+
+`LocalRuntime` now attests only `local.process` and refuses an explicit container-tier request. It runs the tool function in the host process and does not isolate filesystem or network access; `RuntimeSpec.network=False` is not enforced there. `ContainerRuntime` likewise rejects a process or unsupported tier request. `RuntimeSpec.kind=None` lets each runtime choose its actual tier; a requested kind is not a self-attestation.
 
 **Contain:** `EgressPolicy` defaults to deny (`--network=none`); the `local.container` tier is explicitly documented as **not** escape-safe (shared kernel) — it is a dev/trusted-code tier, not a security boundary, and the docs say so rather than implying otherwise.
 
