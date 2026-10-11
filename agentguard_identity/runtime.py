@@ -18,7 +18,9 @@ EXEC_TOOLS = {"shell", "exec"}
 @dataclass(frozen=True)
 class RuntimeSpec:
     code_digest: str = ""
-    kind: str = "local.container"
+    # None lets the selected runtime set its actual tier. An explicit kind is a
+    # request, never evidence that a different runtime provided that isolation.
+    kind: str | None = None
     image: str | None = None
     network: bool = False
     runtime: str | None = None
@@ -53,10 +55,10 @@ class LocalSandbox(PoPCapableSandbox):
 
     def attest(self) -> Attestation:
         return Attestation(
-            runtime_kind=self._spec.kind,
+            runtime_kind="local.process",
             code_digest=self._spec.code_digest,
             sandbox_id=self._sandbox_id,
-            evidence={"pid_namespaced": True, "kind": self._spec.kind},
+            evidence={"pid_namespaced": False, "kind": "local.process"},
         )
 
     def dispatch(self, tool: str, args: dict) -> Any:
@@ -73,6 +75,8 @@ class LocalRuntime:
         self._tool_fn = tool_fn
 
     def spawn(self, spec: RuntimeSpec) -> LocalSandbox:
+        if spec.kind not in (None, "local.process"):
+            raise ValueError("LocalRuntime provides local.process only; use ContainerRuntime for local.container")
         return LocalSandbox(spec, self._tool_fn)
 
 
@@ -154,6 +158,8 @@ class ContainerRuntime:
         self._engine = engine or _find_engine()
 
     def spawn(self, spec: RuntimeSpec) -> ContainerSandbox:
+        if spec.kind not in (None, "local.container", "remote.gvisor"):
+            raise ValueError("ContainerRuntime provides local.container or remote.gvisor, not the requested kind")
         if not spec.image:
             raise ValueError("container runtime requires spec.image")
         want_gvisor = spec.runtime == "runsc" or spec.kind == "remote.gvisor"

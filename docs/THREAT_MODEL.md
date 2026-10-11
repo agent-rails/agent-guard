@@ -89,6 +89,8 @@ This is why the shipped tool functions raise: `agent_guard.cli._shell` runs with
 
 **Prevent:** claiming an isolation tier stronger than what actually ran. `ContainerRuntime.spawn` raises rather than silently falling back to `runc` when `gVisor` was requested but unavailable — claiming isolation it didn't provide is treated as a bug, not a convenience.
 
+`LocalRuntime` now attests only `local.process` and refuses an explicit container-tier request. It runs the tool function in the host process and does not isolate filesystem or network access; `RuntimeSpec.network=False` is not enforced there. `ContainerRuntime` likewise rejects a process or unsupported tier request. `RuntimeSpec.kind=None` lets each runtime choose its actual tier; a requested kind is not a self-attestation.
+
 **Contain:** `EgressPolicy` defaults to deny (`--network=none`); the `local.container` tier is explicitly documented as **not** escape-safe (shared kernel) — it is a dev/trusted-code tier, not a security boundary, and the docs say so rather than implying otherwise.
 
 **Explicit non-goal:** host-allowlist egress is unimplemented and fails loud (`NotImplementedError`) rather than silently granting full network access — a real gap, but a visible one.

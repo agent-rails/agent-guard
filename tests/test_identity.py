@@ -227,6 +227,29 @@ def test_runtime_spawns_and_dispatches():
         sandbox.dispatch("t", {})
 
 
+def test_local_runtime_cannot_claim_container_isolation():
+    runtime = LocalRuntime(tool_fn=lambda tool, args: "ok")
+    sandbox = runtime.spawn(RuntimeSpec(code_digest="digest-ok"))
+    attestation = sandbox.attest()
+    assert attestation.runtime_kind == "local.process"
+    assert attestation.evidence["pid_namespaced"] is False
+    with pytest.raises(ValueError, match="local.process"):
+        runtime.spawn(RuntimeSpec(code_digest="digest-ok", kind="local.container"))
+
+    token = Broker(secret=b"k").mint(attestor(), attestation, "human:x", {"write"}, {"write"})
+    policy = Policy.from_dict(
+        {
+            "default": "deny",
+            "rules": [
+                {"id": "container-only", "decision": "allow", "tools": ["write"], "min_trust_tier": "local.container"}
+            ],
+        }
+    )
+    guard = Guard.from_token(sign(token, b"k"), b"k", policy, MemoryAuditSink())
+    with pytest.raises(BlockedError, match="trust tier"):
+        guard.call(sandbox.dispatch, "write", {})
+
+
 def test_sandbox_without_pop_enabled_has_no_thumbprint_and_refuses_to_prove():
     runtime = LocalRuntime(tool_fn=lambda tool, args: "ok")
     sandbox = runtime.spawn(RuntimeSpec(code_digest="digest-ok", pop_enabled=False))
@@ -271,7 +294,7 @@ def test_end_to_end_spawn_attest_mint_prove_dispatch_with_pop():
     policy = Policy.from_dict(
         {
             "default": "deny",
-            "rules": [{"id": "r", "decision": "allow", "tools": ["prod_write"], "min_trust_tier": "local.container"}],
+            "rules": [{"id": "r", "decision": "allow", "tools": ["prod_write"], "min_trust_tier": "local.process"}],
         }
     )
     guard = Guard.from_token(encoded, b"k", policy, audit=MemoryAuditSink(), pop_proof=proof)

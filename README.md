@@ -392,7 +392,7 @@ Run the whole thing on your laptop, zero cloud:
 python examples/end_to_end.py
 ```
 
-It spawns a local sandbox, attests it, mints an identity whose scopes are `human_grant ∩ task_scope`, then shows a read allowed, a `DROP TABLE` denied, and a `prod_write` blocked because a `local.container` identity is below the `remote.microvm` tier the policy requires — a local agent cannot self-elevate.
+It spawns an in-process local runtime, attests it as `local.process`, mints an identity whose scopes are `human_grant ∩ task_scope`, then shows a read allowed, a `DROP TABLE` denied, and a `prod_write` blocked because the local identity is below the `remote.microvm` tier the policy requires. An in-process runtime cannot claim container isolation by setting `RuntimeSpec.kind`.
 
 Note the composition: the token is signed (`sign(token, secret)`) and the guard is built via `Guard.from_token(encoded, secret, ...)`, which re-verifies the signature and binds expiry and scopes rather than trusting those claims as caller-supplied values. The plain `Guard(...)` constructor still exists for local/no-identity use, but once an encoded token crosses a trust boundary, `from_token` is the path for verifying its authority. A bound guard rejects new calls after expiry; a call already released to a tool is not interrupted when its token expires.
 
@@ -429,6 +429,7 @@ Isolation is a pluggable runtime backend selected by trust tier. The guard gates
 
 | Tier | Backend | Isolation |
 |------|---------|-----------|
+| `local.process` | in-process `LocalRuntime` | same host process, no filesystem or network isolation; trusted development only |
 | `local.container` | docker/podman (runc) | shared kernel — **not escape-safe**, dev/trusted only |
 | `remote.gvisor` | docker + gVisor (`runsc`) | user-space kernel, real added isolation |
 | `remote.microvm` | E2B/Firecracker (managed) | hardware-virtualized microVM *(next)* |
