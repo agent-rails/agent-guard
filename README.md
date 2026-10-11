@@ -357,7 +357,7 @@ guard run --dev-trust-runtime -- git push --force      # gated: prompts a human
 guard run --policy policy.example.yaml --audit run.jsonl -- ./do-thing.sh
 ```
 
-The default `guard run` grant is `shell`, matching the one tool it dispatches. An explicit `--scope` list replaces that default; for example, `--scope read` blocks shell dispatch even if policy would otherwise allow it. `--ttl` limits how long the minted identity can authorize calls, including an already-constructed guard. The CLI's trusted local mint passes the token's scopes and expiry to its guard; callers handling an encoded token should use `Guard.from_token` to verify its signature and bind those claims.
+The command is executed as the argv you pass: each argument reaches the program as written, and shell operators in separate arguments (`;`, `|`, `&&`, `$VAR`, globs) are passed literally, not interpreted. To use shell syntax, pass it as a single argument to a shell: `guard run -- sh -c 'make test | tee out.log'`. Policy rules and the audit record see the same rendering (`shlex.join` of the argv), and `guard explain` renders it identically, so `explain` predicts `run`.
 
 `guard run` is a wrapper, so it is transparent about the command's own result — the command's exit status propagates, and a signal maps to `128 + N` the way a shell reports it:
 
