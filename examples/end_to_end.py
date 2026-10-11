@@ -47,9 +47,9 @@ def policy():
 def main() -> None:
     print("=== four pillars, end to end (local runtime) ===\n")
 
-    # WHERE: spawn an isolated local runtime
+    # WHERE: spawn the in-process local runtime
     runtime = LocalRuntime(tool_fn=real_tools)
-    sandbox = runtime.spawn(RuntimeSpec(code_digest="sha256:agent-image-v1", kind="local.container"))
+    sandbox = runtime.spawn(RuntimeSpec(code_digest="sha256:agent-image-v1", kind="local.process"))
 
     # WHO: attest the runtime, then mint a scoped short-lived identity
     attestor = LocalAttestor(allowlist={"sha256:agent-image-v1"})
@@ -64,7 +64,7 @@ def main() -> None:
             attestor,
             attestation,
             subject="human:frank",
-            human_grant={"read:repo", "write:branch", "sql"},
+            human_grant={"read:repo", "write:branch", "sql", "prod_write"},
             task_scope={"read:repo", "sql", "prod_write"},
         )
     except RefusedError as err:
@@ -106,7 +106,7 @@ def main() -> None:
     blocked = sum(1 for r in audit.records if not r.executed)
     assert blocked == 2, f"expected 2 blocked, got {blocked}"
     print(
-        "\nprod_write blocked: the local identity's tier (local.container) is below the "
+        "\nprod_write blocked: the local identity's tier (local.process) is below the "
         "remote.microvm the policy requires. A local agent cannot self-elevate."
     )
 

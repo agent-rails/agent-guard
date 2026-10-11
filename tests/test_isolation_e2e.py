@@ -98,7 +98,7 @@ def test_isolation_e2e_gvisor_tier_gates_authorization():
 
     sandbox.close()
 
-    executed = [r for r in audit.records if r.executed]
+    executed = [r for r in audit.records if r.executed and r.event == "terminal"]
     blocked = [r for r in audit.records if not r.executed]
     assert len(executed) == 1
     assert len(blocked) == 1

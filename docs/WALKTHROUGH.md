@@ -46,7 +46,7 @@ would_execute: no (blocked)
 The minted identity carries the runtime's trust tier; a rule can require a minimum:
 
 ```
-BLOCKED prod_write -> requires trust tier 'remote.microvm'; caller runtime is 'local.container'
+BLOCKED prod_write -> requires trust tier 'remote.microvm'; caller runtime is 'local.process'
 ```
 
 A local agent cannot self-elevate to run a prod action it isn't attested for.
@@ -55,6 +55,7 @@ A local agent cannot self-elevate to run a prod action it isn't attested for.
 
 | Tier | Backend | Isolation |
 |------|---------|-----------|
+| `local.process` | in-process `LocalRuntime` | same host process, no filesystem or network isolation; trusted development only |
 | `local.container` | docker/podman (runc) | shared kernel — not escape-safe, dev/trusted only |
 | `remote.gvisor` | docker + gVisor (`runsc`) | user-space kernel, real added isolation |
 | `remote.microvm` | E2B/Firecracker (managed) | hardware-virtualized micro-VM (next) |

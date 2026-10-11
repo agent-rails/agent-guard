@@ -42,6 +42,8 @@ def handle_line(line: str, guard: Guard) -> tuple[str | None, str | None]:
         msg = json.loads(stripped)
     except json.JSONDecodeError:
         return line, None
+    except RecursionError:
+        return None, _rejected_response("JSON-RPC message nests too deeply to inspect")
     if isinstance(msg, list):
         return None, _rejected_response("batched JSON-RPC requests are not supported by this proxy")
     if not isinstance(msg, dict) or msg.get("method") != "tools/call":

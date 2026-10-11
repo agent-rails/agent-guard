@@ -17,7 +17,7 @@ from agent_guard import (
     load_policy,
     with_bundled,
 )
-from agent_guard.guard import ApprovalRequest, deny_by_default
+from agent_guard.guard import ApprovalGrant, ApprovalRequest, deny_by_default
 from agent_guard.mcp import run_proxy
 from agentguard_identity import Broker, ContainerRuntime, LocalAttestor, LocalRuntime, RefusedError, RuntimeSpec
 
@@ -129,11 +129,17 @@ def _default_policy() -> Policy:
     )
 
 
-def _tty_approver(request: ApprovalRequest) -> bool:
+def _tty_approver(request: ApprovalRequest) -> ApprovalGrant | None:
     if not sys.stdin.isatty():
-        return False
-    answer = input(f"\n  approve '{request.tool}: {request.args.get('cmd', request.args)}'? [{request.reason}] (y/N) ")
-    return answer.strip().lower() in {"y", "yes"}
+        return None
+    answer = input(
+        f"\n  approve '{request.tool}: {request.args.get('cmd', request.args)}'? [{request.reason}]\n"
+        f"  rule={request.rule_id or '-'} tier={request.trust_tier}\n"
+        f"  call={request.call_id} sha256={request.call_digest}\n  (y/N) "
+    )
+    if answer.strip().lower() in {"y", "yes"}:
+        return ApprovalGrant(request.call_id, request.call_digest)
+    return None
 
 
 def _build_sandbox(args):
@@ -153,7 +159,7 @@ def _run(args) -> int:
       0       the command ran and exited 0
       1       usage error, or the sandbox failed to spawn
       2       refused (attestation not allowlisted)
-      3       blocked by policy
+      3       blocked by policy, scope, or token expiry
       N       the command's own non-zero exit status
       128+N   the command died on signal N (137 for SIGKILL, shell convention)
 
@@ -193,6 +199,8 @@ def _run(args) -> int:
         agent_id=token.agent_id,
         trust_tier=token.trust_tier,
         approver=_tty_approver,
+        scopes=token.scopes,
+        expires_at=token.exp,
     )
 
     command = shlex.join(args.command)
@@ -234,7 +242,7 @@ def _mcp(args) -> int:
 
 def broker_mint(attestor, attestation, args):
     secret = os.urandom(32)
-    grant = set(args.scope)
+    grant = set(args.scope) if args.scope else {"shell"}
     return Broker(secret=secret, ttl_seconds=args.ttl).mint(
         attestor, attestation, subject=args.subject, human_grant=grant, task_scope=grant
     )
@@ -416,7 +424,7 @@ def _check(args) -> int:
     try:
         raw = sys.stdin.read()
         payload = json.loads(raw)
-    except (json.JSONDecodeError, UnicodeDecodeError) as err:
+    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError) as err:
         print(f"malformed JSON payload on stdin: {err}", file=sys.stderr)
         return 1
 
@@ -601,7 +609,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--policy", help="policy file (yaml/json); default blocks rm -rf / drop table, gates force-push")
     run.add_argument("--audit", help="append audit records to this JSONL file")
     run.add_argument("--subject", default=f"human:{os.environ.get('USER', 'unknown')}")
-    run.add_argument("--scope", action="append", default=[], help="granted scope (repeatable)")
+    run.add_argument("--scope", action="append", default=[], help="granted tool scope (repeatable; default: shell)")
     run.add_argument("--allow-digest", action="append", default=[], help="allowlisted code digest (repeatable)")
     run.add_argument("--dev-trust-runtime", action="store_true", help="dev: trust the spawned runtime's digest")
     run.add_argument("--digest", default="dev", help="local runtime code digest")

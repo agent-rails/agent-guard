@@ -50,6 +50,13 @@ def test_non_gvisor_attests_local_container(captured):
     assert sbx.attest().runtime_kind == "local.container"
 
 
+def test_container_runtime_rejects_process_kind(captured):
+    runtime = ContainerRuntime(engine="docker")
+    with pytest.raises(ValueError, match="local.container"):
+        runtime.spawn(RuntimeSpec(kind="local.process", image="busybox"))
+    assert captured == []
+
+
 def test_network_bool_maps_to_egress():
     assert RuntimeSpec(network=False).resolved_egress().default == "deny"
     assert RuntimeSpec(network=True).resolved_egress().default == "allow"

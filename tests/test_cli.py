@@ -13,6 +13,20 @@ def test_allowed_command_runs(capsys):
     assert "hi" in capsys.readouterr().out
 
 
+def test_run_scope_excluding_shell_blocks_dispatch(capsys):
+    code = main(["run", "--dev-trust-runtime", "--scope", "read", "--", "printf", "fixture"])
+    captured = capsys.readouterr()
+    assert code == 3
+    assert "fixture" not in captured.out
+    assert "outside token scopes" in captured.err
+
+
+def test_run_explicit_shell_scope_allows_dispatch(capsys):
+    code = main(["run", "--dev-trust-runtime", "--scope", "shell", "--", "printf", "fixture"])
+    assert code == 0
+    assert "fixture" in capsys.readouterr().out
+
+
 def test_rm_rf_is_blocked():
     code = main(["run", "--dev-trust-runtime", "--", "rm", "-rf", "/tmp/x"])
     assert code == 3
@@ -367,7 +381,7 @@ def test_shell_nonzero_exit_records_the_failure(tmp_path):
         _call_shell("exit 42", audit)
     assert caught.value.returncode == 42
 
-    record = _records(audit)[0]
+    record = _records(audit)[-1]
     assert record["executed"] is True
     assert "exit status 42" in record["error"]
 
@@ -377,7 +391,7 @@ def test_shell_signal_kill_records_the_signal(tmp_path):
     with pytest.raises(subprocess.CalledProcessError):
         _call_shell("kill -9 $$", audit)
 
-    record = _records(audit)[0]
+    record = _records(audit)[-1]
     assert record["executed"] is True
     assert "SIGKILL" in record["error"]
 
@@ -395,10 +409,10 @@ def test_shell_exit_status_and_signal_are_distinguishable_in_the_audit_trail(tmp
     with pytest.raises(subprocess.CalledProcessError):
         _call_shell("kill -9 $$", killed)
 
-    assert _records(clean)[0]["error"] is None
-    assert "exit status 42" in _records(failed)[0]["error"]
-    assert "SIGKILL" in _records(killed)[0]["error"]
-    assert _records(failed)[0]["error"] != _records(killed)[0]["error"]
+    assert _records(clean)[-1]["error"] is None
+    assert "exit status 42" in _records(failed)[-1]["error"]
+    assert "SIGKILL" in _records(killed)[-1]["error"]
+    assert _records(failed)[-1]["error"] != _records(killed)[-1]["error"]
 
 
 def test_run_propagates_child_exit_code_and_still_prints_output(capsys):

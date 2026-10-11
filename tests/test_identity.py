@@ -4,10 +4,12 @@ import base64
 import hashlib
 import hmac
 import json
+from unittest.mock import patch
 
 import pytest
 
-from agent_guard import Guard, MemoryAuditSink, Policy
+from agent_guard import BlockedError, Guard, MemoryAuditSink, Policy
+from agent_guard.guard import ApprovalGrant
 from agentguard_identity import (
     Attestation,
     AttestationResult,
@@ -108,6 +110,53 @@ def test_expired_token_is_rejected():
         verify(encoded, b"k", now=2000.0)
 
 
+def test_existing_token_bound_guard_blocks_after_expiry():
+    token = Token(
+        subject="human:x",
+        agent_id="agent:s1",
+        sandbox_id="s1",
+        trust_tier="local.process",
+        scopes=("shell",),
+        exp=1001.0,
+    )
+    audit = MemoryAuditSink()
+    guard = Guard.from_token(
+        sign(token, b"k"), b"k", Policy.from_dict({"default": "allow", "rules": []}), audit, now=1000.0
+    )
+    dispatched = []
+    with patch("time.time", return_value=1002.0):
+        with pytest.raises(BlockedError, match="expired"):
+            guard.call(lambda tool, args: dispatched.append(tool), "shell", {"cmd": "fixture"})
+    assert dispatched == []
+    assert audit.records[-1].executed is False
+
+
+def test_token_expiry_during_approval_blocks_dispatch():
+    token = Token(
+        subject="human:x",
+        agent_id="agent:s1",
+        sandbox_id="s1",
+        trust_tier="local.process",
+        scopes=("shell",),
+        exp=1001.0,
+    )
+    clock = [1000.0]
+
+    def approve(request):
+        clock[0] = 1002.0
+        return ApprovalGrant(request.call_id, request.call_digest)
+
+    policy = Policy.from_dict(
+        {"default": "deny", "rules": [{"id": "approval", "decision": "require_human", "tools": ["shell"]}]}
+    )
+    guard = Guard.from_token(sign(token, b"k"), b"k", policy, MemoryAuditSink(), approver=approve, now=1000.0)
+    dispatched = []
+    with patch("time.time", side_effect=lambda: clock[0]):
+        with pytest.raises(BlockedError, match="expired"):
+            guard.call(lambda tool, args: dispatched.append(tool), "shell", {"cmd": "fixture"})
+    assert dispatched == []
+
+
 def signed_payload(payload) -> str:
     body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     mac = hmac.new(b"k", body, hashlib.sha256).digest()
@@ -178,6 +227,29 @@ def test_runtime_spawns_and_dispatches():
         sandbox.dispatch("t", {})
 
 
+def test_local_runtime_cannot_claim_container_isolation():
+    runtime = LocalRuntime(tool_fn=lambda tool, args: "ok")
+    sandbox = runtime.spawn(RuntimeSpec(code_digest="digest-ok"))
+    attestation = sandbox.attest()
+    assert attestation.runtime_kind == "local.process"
+    assert attestation.evidence["pid_namespaced"] is False
+    with pytest.raises(ValueError, match="local.process"):
+        runtime.spawn(RuntimeSpec(code_digest="digest-ok", kind="local.container"))
+
+    token = Broker(secret=b"k").mint(attestor(), attestation, "human:x", {"write"}, {"write"})
+    policy = Policy.from_dict(
+        {
+            "default": "deny",
+            "rules": [
+                {"id": "container-only", "decision": "allow", "tools": ["write"], "min_trust_tier": "local.container"}
+            ],
+        }
+    )
+    guard = Guard.from_token(sign(token, b"k"), b"k", policy, MemoryAuditSink())
+    with pytest.raises(BlockedError, match="trust tier"):
+        guard.call(sandbox.dispatch, "write", {})
+
+
 def test_sandbox_without_pop_enabled_has_no_thumbprint_and_refuses_to_prove():
     runtime = LocalRuntime(tool_fn=lambda tool, args: "ok")
     sandbox = runtime.spawn(RuntimeSpec(code_digest="digest-ok", pop_enabled=False))
@@ -222,7 +294,7 @@ def test_end_to_end_spawn_attest_mint_prove_dispatch_with_pop():
     policy = Policy.from_dict(
         {
             "default": "deny",
-            "rules": [{"id": "r", "decision": "allow", "tools": ["prod_write"], "min_trust_tier": "local.container"}],
+            "rules": [{"id": "r", "decision": "allow", "tools": ["prod_write"], "min_trust_tier": "local.process"}],
         }
     )
     guard = Guard.from_token(encoded, b"k", policy, audit=MemoryAuditSink(), pop_proof=proof)

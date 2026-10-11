@@ -66,7 +66,7 @@ runtime isolation are optional layers rather than implied defaults.
 | Policy decision | Ordered rules produce `allow`, `deny`, or `require_human`; every policy must declare its default |
 | Denied call | Never dispatched to the underlying tool |
 | Human gate | Fails closed when no approver is configured or approval is refused |
-| Audit | One structured record per decision through the configured sink |
+| Audit | Blocked calls are recorded; released calls get a pre-dispatch event and a terminal event |
 | Policy matching | RE2-backed matching over tool name, arguments, and optional trust tier |
 | LLM judge | Optional and ceiling-clamped; it can tighten a decision but cannot grant more authority than policy permits |
 | Velocity limit | Optional per-agent/per-tool sliding-window call-count limit |
@@ -178,12 +178,40 @@ python examples/demo.py
 
 Shows a benign query allowed, a `DROP TABLE` blocked, a `git push --force` gated to a human (denied here), and the audit trail for all four.
 
+## Approval and call outcomes
+
+For `Guard.call()` and the `guarded()` decorator, approval requests include a unique
+call ID and a SHA-256 digest binding the agent, trust tier, tool, arguments,
+and full policy verdict. Arguments are frozen into one canonical JSON form that the
+policy, approver, digest, audit record and tool all share, so they must be
+JSON-serializable; anything else is blocked and audited. `guarded()` binds positional
+arguments and default values to parameter names and runs the function on the canonical
+copy; it supports plain functions, not instance methods or partials that freeze positional
+arguments. Nesting is limited to 64 levels. The release event is written before dispatch; the terminal
+event records whether dispatch returned, raised, or ended with an unknown outcome. If a process
+dies after release, `unresolved_releases(records)` identifies the release with no
+terminal event. Audit-sink failure before release prevents dispatch and closes the release
+as `not_dispatched`. Each allowed call writes two `executed=true` records, so count executions
+by filtering on `event`.
+
+An approver must return an `ApprovalGrant` with the same call ID and digest;
+plain `True` values and stale grants fail closed.
+The grant binds a response to the request; the callback remains responsible for
+authenticating the human or approval service and returning a grant only after approval.
+
+This makes missing terminal evidence visible when the release event survives. It
+does not authenticate audit input, prove the producer emitted every event, or protect
+a whole log that was deleted or replaced. Verify signed records before reconciling
+them. MCP forwarding does not yet have terminal-result reporting,
+because the proxy does not observe the downstream tool's response. See the
+[threat model](docs/THREAT_MODEL.md) for these boundaries.
+
 ## Core model
 
 - Policy — an explicit `default` (required — no silent fallback) plus ordered `rules`. First matching rule wins.
 - Rule — `tools` (glob) + optional `arg_patterns` (regex over the rendered args) → a `decision`.
 - Guard — wraps a `dispatch(tool, args)`; evaluates, gates, executes, audits.
-- Audit — one structured record per decision. Sinks: `JsonlAuditSink` (local file), `WebhookAuditSink` (ship to a SIEM / collector — fail-loud, never drops), `CallableAuditSink` (any `emit` callable — OpenTelemetry / statsd / custom), `MultiAuditSink` (fan-out: durable local + remote), `SigningAuditSink` (wraps another sink, HMAC-signs each record so tampering by a party *without* the signing secret is detectable — does not defend against a compromised producer, which already holds the secret it signs with, nor does it detect a producer that simply never emits a record), `MemoryAuditSink` (tests), or your own `AuditSink`.
+- Audit — structured decision and call-lifecycle events. Sinks: `JsonlAuditSink` (local file), `WebhookAuditSink` (ship to a SIEM / collector — fail-loud, never drops), `CallableAuditSink` (any `emit` callable — OpenTelemetry / statsd / custom), `MultiAuditSink` (fan-out: durable local + remote), `SigningAuditSink` (wraps another sink, HMAC-signs each record so tampering by a party *without* the signing secret is detectable — does not defend against a compromised producer, which already holds the secret it signs with, nor does it detect a producer that simply never emits a record), `MemoryAuditSink` (tests), or your own `AuditSink`.
 
 ## Scaling policy — federated, layered, cached
 
@@ -338,7 +366,7 @@ The command is executed as the argv you pass: each argument reaches the program 
 | `0` | the command ran and exited 0 |
 | `1` | usage error (no command given), or the sandbox failed to spawn |
 | `2` | refused — the runtime's code digest is not allowlisted |
-| `3` | blocked by policy |
+| `3` | blocked by policy, scope, or token expiry |
 | `N` | the command's own non-zero exit status |
 | `128+N` | the command died on signal `N` (`137` for SIGKILL) |
 
@@ -364,9 +392,9 @@ Run the whole thing on your laptop, zero cloud:
 python examples/end_to_end.py
 ```
 
-It spawns a local sandbox, attests it, mints an identity whose scopes are `human_grant ∩ task_scope`, then shows a read allowed, a `DROP TABLE` denied, and a `prod_write` blocked because a `local.container` identity is below the `remote.microvm` tier the policy requires — a local agent cannot self-elevate.
+It spawns an in-process local runtime, attests it as `local.process`, mints an identity whose scopes are `human_grant ∩ task_scope`, then shows a read allowed, a `DROP TABLE` denied, and a `prod_write` blocked because the local identity is below the `remote.microvm` tier the policy requires. An in-process runtime cannot claim container isolation by setting `RuntimeSpec.kind`.
 
-Note the composition: the token is signed (`sign(token, secret)`) and the guard is built via `Guard.from_token(encoded, secret, ...)`, which re-verifies the signature rather than trusting `agent_id`/`trust_tier` as caller-supplied strings. The plain `Guard(...)` constructor still exists for local/no-identity use, but once a `Broker` is in the picture, `from_token` is the only path `min_trust_tier` rules should be relied on against.
+Note the composition: the token is signed (`sign(token, secret)`) and the guard is built via `Guard.from_token(encoded, secret, ...)`, which re-verifies the signature and binds expiry and scopes rather than trusting those claims as caller-supplied values. The plain `Guard(...)` constructor still exists for local/no-identity use, but once an encoded token crosses a trust boundary, `from_token` is the path for verifying its authority. A bound guard rejects new calls after expiry; a call already released to a tool is not interrupted when its token expires.
 
 The block boundary is deliberate and asymmetric: `agentguard_identity` has zero dependency on `agent_guard`; `agent_guard` depends on identity only through verification (`from_token`, PoP), never the reverse. Identity says *who/where*, the guard says *what*, the audit sink says *did*. See `docs/DESIGN-runtime-identity-binding.md` for the local-and-remote design and the honest trust gradient.
 
@@ -401,6 +429,7 @@ Isolation is a pluggable runtime backend selected by trust tier. The guard gates
 
 | Tier | Backend | Isolation |
 |------|---------|-----------|
+| `local.process` | in-process `LocalRuntime` | same host process, no filesystem or network isolation; trusted development only |
 | `local.container` | docker/podman (runc) | shared kernel — **not escape-safe**, dev/trusted only |
 | `remote.gvisor` | docker + gVisor (`runsc`) | user-space kernel, real added isolation |
 | `remote.microvm` | E2B/Firecracker (managed) | hardware-virtualized microVM *(next)* |
