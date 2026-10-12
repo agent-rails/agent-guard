@@ -824,6 +824,9 @@ def _run_guard(args) -> int:
     if args.outcome_file and args.audit and _same_file(Path(args.outcome_file), Path(args.audit)):
         print("--outcome-file and --audit must be different files", file=sys.stderr)
         return 1
+    if args.outcome_file and args.policy and _same_file(Path(args.outcome_file), Path(args.policy)):
+        print("--outcome-file and --policy must be different files", file=sys.stderr)
+        return 1
     if args.outcome_file:
         try:
             _prepare_outcome(args.outcome_file)
