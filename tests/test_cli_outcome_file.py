@@ -183,6 +183,69 @@ def test_outcome_file_may_not_be_the_audit_file(tmp_path, capsys):
     assert not shared.exists()
 
 
+@pytest.mark.parametrize("alias_kind", ["same", "symlink", "hardlink"])
+def test_outcome_file_may_not_alias_the_policy_file(tmp_path, capsys, alias_kind):
+    policy = tmp_path / "policy.json"
+    original = json.dumps({"default": "allow", "rules": []})
+    policy.write_text(original)
+    outcome = policy
+    if alias_kind == "symlink":
+        outcome = tmp_path / "outcome.json"
+        outcome.symlink_to(policy)
+    elif alias_kind == "hardlink":
+        outcome = tmp_path / "outcome.json"
+        outcome.hardlink_to(policy)
+
+    code = main(
+        [
+            "run",
+            "--dev-trust-runtime",
+            "--policy",
+            str(outcome),
+            "--outcome-file",
+            str(policy),
+            "--",
+            "echo",
+            "should-not-run",
+        ]
+    )
+
+    assert code == 1
+    assert "must be different files" in capsys.readouterr().err
+    assert policy.read_text() == original
+
+
+@pytest.mark.parametrize("alias_kind", ["same", "policy_symlink"])
+def test_policy_alias_is_rejected_before_stale_outcome_cleanup(tmp_path, capsys, alias_kind):
+    outcome = tmp_path / "outcome.json"
+    original = json.dumps({"outcome": "completed", "exit_code": 0, "reason": None})
+    outcome.write_text(original)
+    policy = outcome
+    if alias_kind == "policy_symlink":
+        policy = tmp_path / "policy.json"
+        policy.symlink_to(outcome)
+
+    code = main(
+        [
+            "run",
+            "--dev-trust-runtime",
+            "--policy",
+            str(policy),
+            "--outcome-file",
+            str(outcome),
+            "--",
+            "echo",
+            "should-not-run",
+        ]
+    )
+
+    assert code == 1
+    assert "must be different files" in capsys.readouterr().err
+    assert outcome.read_text() == original
+    if alias_kind == "policy_symlink":
+        assert policy.is_symlink()
+
+
 def test_unusable_outcome_path_fails_before_the_command_runs(tmp_path, capsys):
     marker = tmp_path / "ran"
     directory = tmp_path / "outcome.json"

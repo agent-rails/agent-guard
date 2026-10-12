@@ -21,6 +21,7 @@ Notable changes. This project follows [Semantic Versioning](https://semver.org).
 
 ### Fixed
 
+- CLI: `guard run --outcome-file` could clear the configured policy file when both options referred to the same path, then fail while loading the now-missing policy. The CLI now rejects outcome/policy path aliases before clearing either file; direct, symlink, and hard link collisions leave the policy intact.
 - CLI: `guard run` and `guard explain` re-joined the command's argv with spaces before
   handing it to `shell=True`, so the command that executed was not the command the
   operator typed: `guard run -- sh -c 'exit 42'` ran `sh -c exit 42` and exited 0, quoting

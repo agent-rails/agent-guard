@@ -175,6 +175,21 @@ def _outcome_paths_from_argv(argv: list[str]) -> list[str]:
     return paths
 
 
+def _policy_paths_from_argv(argv: list[str]) -> list[str]:
+    if not argv or argv[0] != "run":
+        return []
+    tokens = argv[1:]
+    paths: list[str] = []
+    for index, token in enumerate(tokens):
+        if token == "--":
+            break
+        if token == "--policy" and index + 1 < len(tokens):
+            paths.append(tokens[index + 1])
+        elif token.startswith("--policy="):
+            paths.append(token.split("=", 1)[1])
+    return paths
+
+
 def _is_guard_outcome(path: Path) -> bool:
     try:
         if path.is_symlink() or not path.is_file() or path.stat().st_size > OUTCOME_MAX_BYTES:
@@ -199,6 +214,15 @@ def _same_file(first: Path, second: Path) -> bool:
         return first.exists() and second.exists() and os.path.samefile(first, second)
     except OSError:
         return False
+
+
+def _reject_outcome_policy_collisions(argv: list[str]) -> bool:
+    for outcome in _outcome_paths_from_argv(argv):
+        for policy in _policy_paths_from_argv(argv):
+            if _same_file(Path(outcome), Path(policy)):
+                print("--outcome-file and --policy must be different files", file=sys.stderr)
+                return True
+    return False
 
 
 def _prepare_outcome(outcome_file: str) -> None:
@@ -824,6 +848,9 @@ def _run_guard(args) -> int:
     if args.outcome_file and args.audit and _same_file(Path(args.outcome_file), Path(args.audit)):
         print("--outcome-file and --audit must be different files", file=sys.stderr)
         return 1
+    if args.outcome_file and args.policy and _same_file(Path(args.outcome_file), Path(args.policy)):
+        print("--outcome-file and --policy must be different files", file=sys.stderr)
+        return 1
     if args.outcome_file:
         try:
             _prepare_outcome(args.outcome_file)
@@ -841,6 +868,8 @@ def _run_guard(args) -> int:
 
 def main(argv=None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
+    if _reject_outcome_policy_collisions(arguments):
+        return 1
     _discard_stale_outcomes(arguments)
     args = build_parser().parse_args(arguments)
     if args.func is _run:
