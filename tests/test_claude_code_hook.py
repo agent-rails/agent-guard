@@ -212,7 +212,8 @@ def test_malformed_or_hostile_input_exits_two_in_enforce(options, name):
 def test_fault_message_carries_the_recovery_hint_and_is_audited(options):
     result = run(b"not json", options)
     assert result.stderr.startswith("agent-guard fault, command blocked: JSONDecodeError")
-    assert "guard install claude-code --uninstall" in result.stderr
+    assert result.stderr.endswith("Recovery from a terminal: guard install claude-code --check.")
+    assert "--uninstall" not in result.stderr
     row = audit_rows(options)[0]
     assert (row["event"], row["outcome"], row["rule_id"]) == ("fault", "fault", "hook-fault")
 

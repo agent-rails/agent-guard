@@ -27,6 +27,7 @@ SELFTEST_TIMEOUT_SECONDS = 30
 CANARY_COMMAND = "rm -rf /tmp/agent-guard-selftest-canary"
 VERIFIED_NOTICE = "command verified; firing inside Claude Code not verified"
 RECOVERY_NOTICE = f"agent-guard hook failed, command blocked. {RECOVERY_HINT}"
+UNINSTALL_NOTICE = "to remove the hook: guard install claude-code --uninstall, with the --scope it was installed with"
 
 
 class InstallError(Exception):
@@ -46,6 +47,42 @@ class Report:
 class SelfTestResult:
     problems: list[str]
     warnings: list[str]
+
+
+def starter_policy(policy: Path, audit: Path) -> dict[str, Any]:
+    return {
+        "default": "allow",
+        "rules": [
+            {
+                "id": "block-rm-rf",
+                "decision": "deny",
+                "tools": ["shell"],
+                "arg_patterns": [r"\brm\s+-rf\b", r"\brm\s+-fr\b"],
+                "reason": "recursive force delete is blocked",
+            },
+            {
+                "id": "gate-agent-guard-control-plane",
+                "decision": "require_human",
+                "tools": ["shell"],
+                "arg_patterns": [
+                    r"\bguard\s+install\b",
+                    "agent_guard",
+                    "disableAllHooks",
+                    r"\.claude/settings",
+                    re.escape(str(policy)),
+                    re.escape(str(audit)),
+                ],
+                "reason": "touches the agent-guard hook, its policy, its audit log or Claude Code settings",
+            },
+            {
+                "id": "gate-force-push",
+                "decision": "require_human",
+                "tools": ["shell"],
+                "arg_patterns": [r"git\s+push\b.*--force", r"git\s+push\b.*-f\b"],
+                "reason": "force-push rewrites shared history",
+            },
+        ],
+    }
 
 
 def default_policy_path() -> Path:
@@ -379,6 +416,7 @@ def install(
     lines += [f"WARNING: {warning}" for warning in disabled_hooks_warnings(visible_settings)]
     lines.append(f"policy: {policy}")
     lines.append(f"audit: {audit}")
+    lines.append(UNINSTALL_NOTICE)
     lines.append(VERIFIED_NOTICE)
     return Report(True, lines)
 
@@ -454,8 +492,14 @@ def check(
     if not ours:
         return Report(False, [f"PROBLEM: no agent-guard hook in {settings_path.resolve()}"])
     if len(ours) > 1:
-        return Report(False, [f"PROBLEM: {len(ours)} agent-guard hook entries; re-run guard install claude-code"])
+        return Report(
+            False,
+            [f"PROBLEM: {len(ours)} agent-guard hook entries; re-run guard install claude-code", UNINSTALL_NOTICE],
+        )
     group, hook = ours[0]
     report = _check_entry(group, hook, python, claude_version)
     warnings = [f"WARNING: {warning}" for warning in disabled_hooks_warnings(visible_settings)]
-    return Report(report.ok, [*report.lines, *warnings])
+    lines = [*report.lines, *warnings]
+    if not report.ok:
+        lines.append(UNINSTALL_NOTICE)
+    return Report(report.ok, lines)

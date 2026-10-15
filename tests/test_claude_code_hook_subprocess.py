@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from agent_guard import claude_code
-from agent_guard.claude_code_install import RECOVERY_NOTICE, build_command
+from agent_guard.claude_code_install import RECOVERY_NOTICE, build_command, starter_policy
 
 POLICY = {
     "default": "allow",
@@ -172,7 +172,13 @@ def test_fault_prints_the_recovery_hint_exactly_once(hook_python, tmp_path, audi
     command = build_command(hook_python, str(tmp_path / "gone.json"), str(audit), "enforce")
     result = run_installed(command, event("echo hi"))
     assert result.returncode == 2
-    assert result.stderr.decode().count("guard install claude-code --uninstall") == 1
+    assert result.stderr.decode().count("guard install claude-code --check") == 1
+    assert "--uninstall" not in result.stderr.decode()
+
+
+@pytest.mark.parametrize("mode", ["enforce", "observe"])
+def test_persisted_command_never_names_the_uninstall_switch(hook_python, policy, audit, mode):
+    assert "--uninstall" not in build_command(hook_python, str(policy), str(audit), mode)
 
 
 def test_isolated_mode_ignores_a_hostile_pythonpath(enforce, tmp_path):
@@ -217,6 +223,41 @@ def test_installed_command_fuzz_exits_only_zero_or_two(enforce):
         assert result.returncode in (0, 2), raw
         if result.returncode == 0:
             assert json.loads(raw)["hook_event_name"] == "PreToolUse"
+
+
+def self_protection_commands(policy_path: Path, audit_path: Path) -> list[str]:
+    return [
+        "guard install claude-code --uninstall",
+        "/opt/venv/bin/python -I -m agent_guard.cli install claude-code --uninstall",
+        "jq '.disableAllHooks = true' s.json > t.json",
+        "sed -i.bak '/PreToolUse/d' ~/.claude/settings.json",
+        f"rm {policy_path}",
+        f"truncate -s 0 {audit_path}",
+    ]
+
+
+@pytest.fixture
+def starter_enforce(hook_python, tmp_path, audit) -> tuple[str, Path]:
+    starter = tmp_path / "starter-policy.json"
+    starter.write_text(json.dumps(starter_policy(starter, audit)))
+    return build_command(hook_python, str(starter), str(audit), "enforce"), starter
+
+
+def test_starter_policy_asks_before_touching_the_hook_control_plane(starter_enforce, audit):
+    command, starter = starter_enforce
+    for bash in self_protection_commands(starter, audit):
+        result = run_installed(command, event(bash))
+        assert result.returncode == 0, bash
+        assert json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"] == "ask", bash
+        bypass = run_installed(command, event(bash, permission_mode="bypassPermissions"))
+        assert (bypass.returncode, bypass.stdout) == (2, b""), bash
+
+
+def test_starter_policy_still_allows_ordinary_commands(starter_enforce):
+    command, _starter = starter_enforce
+    for bash in ("ls -la", "git status", "cat README.md", "echo agent-guard-selftest"):
+        result = run_installed(command, event(bash))
+        assert (result.returncode, result.stdout) == (0, b""), bash
 
 
 def test_parallel_hooks_keep_every_audit_line_intact(enforce, audit):

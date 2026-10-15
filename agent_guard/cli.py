@@ -617,7 +617,7 @@ def _hook_claude_code(args) -> int:
     return result.exit_code
 
 
-def _hook_policy_path(args) -> Path:
+def _hook_policy_path(args, audit: Path) -> Path:
     if args.policy:
         path = Path(args.policy).expanduser().absolute()
         if not path.is_file():
@@ -626,7 +626,8 @@ def _hook_policy_path(args) -> Path:
     path = claude_code_install.default_policy_path()
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(_render_starter(".json"), encoding="utf-8")
+        starter = claude_code_install.starter_policy(path, audit)
+        path.write_text(json.dumps(starter, indent=2) + "\n", encoding="utf-8")
         print(f"wrote starter policy: {path}")
     return path
 
@@ -654,7 +655,7 @@ def _install_claude_code(args) -> int:
             report = claude_code_install.install(
                 settings_path,
                 sys.executable,
-                _hook_policy_path(args),
+                _hook_policy_path(args, audit),
                 audit,
                 args.mode,
                 args.scope,

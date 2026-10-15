@@ -23,7 +23,7 @@ MAX_DESCRIPTION_AUDIT_BYTES = 256
 SELFTEST_SESSION = "agent-guard-selftest"
 SELFTEST_AGENT_ID = f"claude-code:{SELFTEST_SESSION}"
 DENY_MARKER = "agent-guard blocked"
-RECOVERY_HINT = "Recovery from a terminal: guard install claude-code --check, or guard install claude-code --uninstall."
+RECOVERY_HINT = "Recovery from a terminal: guard install claude-code --check."
 
 _SAFE_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 

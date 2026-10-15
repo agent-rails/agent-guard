@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from agent_guard import Decision, Policy
 from agent_guard import claude_code_install as installer
 from agent_guard.claude_code import SELFTEST_AGENT_ID
 from agent_guard.claude_code_install import InstallError
@@ -87,8 +88,7 @@ def test_build_command_golden_enforce_and_observe():
     assert enforce == (
         "/opt/venv/bin/python -I -m agent_guard.cli hook claude-code --policy '/etc/a b/policy.json' "
         "--audit /var/audit.jsonl --mode enforce || { [ $? -eq 2 ] || echo 'agent-guard hook failed, command "
-        "blocked. Recovery from a terminal: guard install claude-code --check, or guard install claude-code "
-        "--uninstall.' >&2; exit 2; }"
+        "blocked. Recovery from a terminal: guard install claude-code --check.' >&2; exit 2; }"
     )
     observe = installer.build_command("/opt/venv/bin/python", "/p.json", "/a.jsonl", "observe")
     assert (
@@ -399,6 +399,22 @@ def test_check_passes_on_a_healthy_install(settings_path, hook_python, policy, a
     report = installer.check(settings_path, hook_python, None, [])
     assert report.ok
     assert report.lines[-1] == "command verified; firing inside Claude Code not verified"
+    assert not any("--uninstall" in line for line in report.lines)
+
+
+def test_install_output_names_the_uninstall_step_for_the_operator(settings_path, hook_python, policy, audit):
+    report = do_install(settings_path, hook_python, policy, audit)
+    assert installer.UNINSTALL_NOTICE in report.lines
+
+
+def test_starter_policy_gates_the_control_plane_with_its_own_paths(tmp_path):
+    policy_path = tmp_path / "a b" / "policy.json"
+    audit_path = tmp_path / "state" / "audit.jsonl"
+    starter = installer.starter_policy(policy_path, audit_path)
+    loaded = Policy.from_dict(starter)
+    for command in (f"rm {policy_path}", f": > {audit_path}", "guard install claude-code --uninstall"):
+        assert loaded.evaluate("shell", {"cmd": command}).decision is Decision.REQUIRE_HUMAN, command
+    assert loaded.evaluate("shell", {"cmd": f"cat {tmp_path / 'other.json'}"}).decision is Decision.ALLOW
 
 
 def test_check_flags_missing_entry_duplicates_and_stale_matcher(settings_path, hook_python, policy, audit):
@@ -422,6 +438,7 @@ def test_check_flags_a_deleted_policy_and_a_missing_interpreter(settings_path, h
     report = installer.check(settings_path, hook_python, None, [])
     assert not report.ok
     assert "does not load" in report.lines[0]
+    assert report.lines[-1] == installer.UNINSTALL_NOTICE
     policy.write_text(json.dumps(POLICY))
     text = settings_path.read_text().replace(hook_python, "/nonexistent/python")
     settings_path.write_text(text)
@@ -480,7 +497,8 @@ def test_cli_install_check_uninstall_round_trip_with_the_default_starter_policy(
     out = capsys.readouterr().out
     assert "command verified; firing inside Claude Code not verified" in out
     starter = tmp_path / "xdg-config" / "agent-guard" / "claude-code-policy.json"
-    assert json.loads(starter.read_text())["default"] == "allow"
+    audit_path = tmp_path / "xdg-state" / "agent-guard" / "claude-code.jsonl"
+    assert json.loads(starter.read_text()) == installer.starter_policy(starter, audit_path)
     assert (tmp_path / "xdg-state" / "agent-guard").is_dir()
     settings_path = fake_home / ".claude" / "settings.json"
     assert len(our_hooks(read(settings_path))) == 1
