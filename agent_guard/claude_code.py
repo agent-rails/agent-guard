@@ -123,7 +123,7 @@ def parse_event(raw: bytes) -> HookEvent:
 
 def map_tool_call(event: HookEvent) -> MappedCall:
     if event.tool_name != "Bash":
-        return MappedCall(event.tool_name, event.tool_input, {})
+        raise ValueError(f"tool_name must be exactly 'Bash' for this hook, got {event.tool_name!r}")
     command = event.tool_input.get("command")
     if not isinstance(command, str):
         raise ValueError("Bash tool_input.command must be a string")
@@ -151,9 +151,6 @@ def _digest(text: str) -> str:
 
 
 def redact_for_audit(call: MappedCall) -> dict[str, Any]:
-    if call.tool != "shell":
-        canonical = json.dumps(call.args, sort_keys=True)
-        return {"keys": sorted(call.args), "args_sha256": _digest(canonical), "args_len": len(canonical)}
     command = call.args["cmd"]
     audited: dict[str, Any] = {
         "cmd": _truncate(_mask(command), MAX_CMD_AUDIT_BYTES),

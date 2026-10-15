@@ -362,12 +362,26 @@ def test_audit_command_is_truncated_but_hash_and_length_cover_the_whole_command(
     assert audited["cmd_len"] == len(command)
 
 
-def test_non_shell_tools_are_audited_as_hash_and_keys_only(options):
-    raw = json.dumps(valid(tool_name="Write", tool_input={"file_path": "/a", "content": "SECRET BODY"})).encode()
-    assert run(raw, options).exit_code == 0
-    args = audit_rows(options)[0]["args"]
-    assert args["keys"] == ["content", "file_path"]
-    assert "SECRET BODY" not in json.dumps(args)
+UNMAPPED_TOOL_NAMES = ["BASH", " Bash", "bash", "Bash ", "Write", "mcp__db__query"]
+
+
+@pytest.mark.parametrize("tool_name", UNMAPPED_TOOL_NAMES)
+def test_any_tool_other_than_exactly_bash_is_a_fault_in_enforce(options, tool_name):
+    raw = json.dumps(valid(tool_name=tool_name, tool_input={"command": "echo hi", "content": "SECRET BODY"})).encode()
+    result = run(raw, options)
+    assert (result.exit_code, result.stdout) == (2, "")
+    assert result.stderr.startswith("agent-guard fault, command blocked: ValueError")
+    row = audit_rows(options)[0]
+    assert (row["event"], row["args"]) == ("fault", {})
+    assert "SECRET BODY" not in json.dumps(row)
+
+
+@pytest.mark.parametrize("tool_name", UNMAPPED_TOOL_NAMES)
+def test_any_tool_other_than_exactly_bash_passes_in_observe(options, tool_name):
+    raw = json.dumps(valid(tool_name=tool_name, tool_input={"command": "echo hi"})).encode()
+    result = run(raw, observe(options))
+    assert (result.exit_code, result.stdout) == (0, "")
+    assert audit_rows(options)[0]["event"] == "fault"
 
 
 def test_cli_stdout_stays_exactly_the_ask_json_when_a_library_prints(options, monkeypatch, capsys):
