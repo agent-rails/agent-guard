@@ -147,7 +147,7 @@ guard install claude-code --mode enforce   # block denies, ask on require_human
 
 One command installs a `PreToolUse` hook for the Bash tool, wraps it so a crash blocks instead of allowing, and self-tests the exact installed command before reporting success. Policy rules target tool `shell` with arg `cmd`.
 
-**This is a guardrail tier, not a boundary.** It stops honest mistakes and non-adaptive prompt injection that issue a recognisable command. At user scope the agent's own Bash tool can edit the hook, the policy and the settings that load them, and regex over command text is defeated by shell indirection. It does not stop an adaptive or compromised agent. It checks Bash only. On Claude Code before 2.1.295 a hook that times out lets the command run. See [`docs/claude-code-hook.md`](docs/claude-code-hook.md) for the decision table, the fail-closed matrix by version, and the recovery runbook.
+**This is a guardrail tier, not a boundary.** It stops honest mistakes and non-adaptive prompt injection that issue a recognisable command. At user scope the agent's own Bash tool can edit the hook, the policy and the settings that load them, and regex over command text is defeated by shell indirection. It does not stop an adaptive or compromised agent. It checks Bash only. Observe mode never blocks; audit redaction is best-effort masking of known secret shapes. On Claude Code before 2.1.295 a hook that times out lets the command run. See [`docs/claude-code-hook.md`](docs/claude-code-hook.md) for the decision table, the fail-closed matrix by version, and the recovery runbook.
 
 Do not wire `guard check` straight into a hook: it exits 3 and 4, which Claude Code treats as non-blocking, so it blocks nothing.
 
