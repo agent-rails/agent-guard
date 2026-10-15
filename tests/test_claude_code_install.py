@@ -446,6 +446,66 @@ def test_install_output_names_the_uninstall_step_for_the_operator(settings_path,
     assert installer.UNINSTALL_NOTICE in report.lines
 
 
+def starter_decision(tmp_path, command: str) -> Decision:
+    starter = installer.starter_policy(tmp_path / "policy.json", tmp_path / "audit.jsonl")
+    return Policy.from_dict(starter).evaluate("shell", {"cmd": command}).decision
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rm -rf /tmp/x",
+        "RM -rf /tmp/x",
+        "rm -fR /tmp/x",
+        "rm -Rf /tmp/x",
+        "rm -vrf /tmp/x",
+        "rm -v -rf /tmp/x",
+        "rm -r -f /tmp/x",
+        "rm -f -r /tmp/x",
+        "rm --recursive --force /tmp/x",
+        "rm --force --recursive /tmp/x",
+        "rm -r --force /tmp/x",
+        "/bin/rm -rf /tmp/x",
+        "cd /tmp && rm -rf x",
+    ],
+)
+def test_starter_denies_recursive_force_delete_in_any_flag_form(tmp_path, command):
+    assert starter_decision(tmp_path, command) is Decision.DENY
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git push --force",
+        "git push -f origin main",
+        "GIT PUSH --FORCE",
+        "git push --force-with-lease",
+        "git -C repo push --force",
+        "git push origin +main",
+        "git push -uf origin main",
+    ],
+)
+def test_starter_gates_force_push_in_any_form(tmp_path, command):
+    assert starter_decision(tmp_path, command) is Decision.REQUIRE_HUMAN
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rm file.txt",
+        "rm -f file.txt",
+        "rm -r build",
+        "rm -r build; cp -f a b",
+        "git push origin main",
+        "git push --follow-tags origin main",
+        "git push origin feature-fix",
+        "ls -rf",
+    ],
+)
+def test_starter_still_allows_ordinary_rm_and_push(tmp_path, command):
+    assert starter_decision(tmp_path, command) is Decision.ALLOW
+
+
 def test_starter_policy_gates_the_control_plane_with_its_own_paths(tmp_path):
     policy_path = tmp_path / "a b" / "policy.json"
     audit_path = tmp_path / "state" / "audit.jsonl"

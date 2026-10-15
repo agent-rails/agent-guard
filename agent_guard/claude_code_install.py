@@ -28,6 +28,9 @@ SELFTEST_TIMEOUT_SECONDS = 30
 CANARY_COMMAND = "rm -rf /tmp/agent-guard-selftest-canary"
 VERIFIED_NOTICE = "command verified; firing inside Claude Code not verified"
 RECOVERY_NOTICE = f"agent-guard hook failed, command blocked. {RECOVERY_HINT}"
+RM_PREFIX = r"(?i)\brm\b[^;&|\n]*\s"
+RM_RECURSIVE = r"(?:-[a-z]*r[a-z]*|--recursive)"
+RM_FORCE = r"(?:-[a-z]*f[a-z]*|--force)"
 UNINSTALL_NOTICE = "to remove the hook: guard install claude-code --uninstall, with the --scope it was installed with"
 
 
@@ -58,7 +61,11 @@ def starter_policy(policy: Path, audit: Path) -> dict[str, Any]:
                 "id": "block-rm-rf",
                 "decision": "deny",
                 "tools": ["shell"],
-                "arg_patterns": [r"\brm\s+-rf\b", r"\brm\s+-fr\b"],
+                "arg_patterns": [
+                    RM_PREFIX + r"-[a-z]*(?:r[a-z]*f|f[a-z]*r)",
+                    RM_PREFIX + RM_RECURSIVE + r"\s(?:[^;&|\n]*\s)?" + RM_FORCE + r"\b",
+                    RM_PREFIX + RM_FORCE + r"\s(?:[^;&|\n]*\s)?" + RM_RECURSIVE + r"\b",
+                ],
                 "reason": "recursive force delete is blocked",
             },
             {
@@ -79,7 +86,9 @@ def starter_policy(policy: Path, audit: Path) -> dict[str, Any]:
                 "id": "gate-force-push",
                 "decision": "require_human",
                 "tools": ["shell"],
-                "arg_patterns": [r"git\s+push\b.*--force", r"git\s+push\b.*-f\b"],
+                "arg_patterns": [
+                    r"(?i)\bgit\b[^;&|\n]*\spush\b[^;&|\n]*\s(?:--force(?:-with-lease)?\b|-[a-z]*f[a-z]*\b|\+\S)"
+                ],
                 "reason": "force-push rewrites shared history",
             },
         ],
