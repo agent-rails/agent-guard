@@ -60,9 +60,25 @@ Run with `claude -p --model haiku --setting-sources project --settings <throwawa
 | End to end, `require_human` under `bypassPermissions` | same | blocked (exit 2); audit `require_human`/`blocked` |
 | End to end, missing policy | installed command pointing at a deleted policy | blocked with the fault message and recovery hint; audit `fault` |
 
-Observed while checking: when Claude Code reports a blocked call to the agent, it prints the hook's full command string before the stderr message, so the policy path, the audit path and the recovery hint are visible to the agent.
+Observed while checking: when Claude Code reports a blocked call to the agent, it prints the hook's full command string before the stderr message, so the policy path, the audit path and the recovery hint are visible to the agent. The recovery hint therefore must not name an off-switch; it names only `--check`.
 
 Not checked live: what `ask` does in an interactive session under `dontAsk` or `auto`, whether a running session picks up a settings-file edit, in-process teammate `agent_id` format, and behaviour on Claude Code versions before 2.1.295.
+
+#### Re-run after hardening (Claude Code 2.1.300, same method)
+
+Hook commands as written by the current `build_command`, policy from the current `starter_policy`.
+
+| Check | Result |
+|---|---|
+| Enforce, `rm -fR <dir>` | blocked; directory still present; audit `deny`/`block-rm-rf`/`blocked` |
+| Enforce, missing policy | blocked; agent-visible text names only `guard install claude-code --check`; `--uninstall` appears 0 times |
+| Enforce, deny | agent-visible text contains no `--uninstall` |
+| Enforce, version-skewed command (`hook claude-codex`) | blocked |
+| Observe, `rm -rf <dir>` | ran (directory deleted); audit `deny`/`observed` |
+| Observe, version-skewed command | ran: `\|\| exit 0` turns the argparse error into a pass |
+| `echo guard install claude-code --uninstall > <file>` in `-p`, `default` mode | not run; agent shown the `gate-agent-guard-control-plane` reason; audit `require_human`/`ask` |
+| Same under `bypassPermissions` | blocked (exit 2); audit `require_human`/`blocked` |
+| Allow | ran; audit `allow`/`deferred` |
 
 ### Claude Code hook: adapter and installer findings
 
@@ -70,6 +86,15 @@ Not checked live: what `ask` does in an interactive session under `dontAsk` or `
 |---|---|---|
 | Fault records written before this fix carried no session, so the installer's own fault probe was counted as a real fault and `guard report` could not exclude it | MEDIUM | Faults after the event parses are attributed to its session and `tool_use_id`; the self-test probe is a parseable self-test event, so every self-test row is excluded. Test asserts all self-test rows carry the self-test agent id |
 | `guard report` called a hook that faults on every call `NOT FIRING`, which is the opposite of the truth in the case that matters most: enforce mode blocking everything | MEDIUM | New `FIRING, FAULTING` status, exit 0, fault timestamps count toward first and last event. Reverting the fix turns the test red |
+| `--check` ran the stored hook command through `sh -c`, so a repository-controlled `.claude/settings.json` with `; touch MARKER` appended executed it | HIGH | Strict parse, rebuild with `build_command`, refuse on any difference or when the interpreter is not the running one, run only the rebuilt string. The tampered command created the marker before the fix; refused with no marker after |
+| The agent-visible recovery hint named `guard install claude-code --uninstall`, and nothing gated that command through Bash | HIGH | Hint names only `--check`; the installer's starter requires a human for `guard install`, `agent_guard`, `disableAllHooks`, `.claude/settings` and the written paths |
+| An exception or Ctrl-C during the post-write self-test left the new settings in place; a corrupt audit line raised out of install | MEDIUM | Any exception restores the original settings and re-raises; the self-test reads the audit through the report reader, which skips bad lines |
+| `require_human` asked in any permission mode except `bypassPermissions`, including unknown, missing and case-variant modes | MEDIUM | Allowlist `default`, `acceptEdits`, `plan`, `dontAsk`; everything else exits 2 |
+| The observe command had no wrapper, so an argparse error from a version-skewed install exited 2 and blocked | MEDIUM | `\|\| exit 0`; skewed observe exits 0, skewed enforce still exits 2 |
+| A tool name other than `Bash` (`bash`, ` Bash`, `Write`) reached the policy under its own name and was allowed by `default: allow` | MEDIUM | Any tool other than exactly `Bash` is a fault |
+| The starter missed `RM -rf`, `rm -fR`, `rm -r -f`, `rm --recursive --force`, `git -C repo push --force`, `git push origin +main` | MEDIUM | Case-insensitive, flag-form-aware rules within one simple command, in the hook's own starter only |
+| The audit sink followed a symlink at the audit path and left a pre-existing `0644` file readable; several common secret shapes were stored in clear | MEDIUM | `O_NOFOLLOW` and `fchmod 0600`; masking for URL userinfo in any scheme, `X-Api-Key`, `mysql -p`, `curl -u`, `--password`, quoted assignment values |
+| `guard report` crashed on a row with a missing or naive `ts` and printed control characters from audit rows verbatim | LOW | Such rows are counted as unreadable; printed free text has control characters escaped |
 
 ### Package naming (`identity` -> `agentguard_identity`)
 
