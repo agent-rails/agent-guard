@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 from contextlib import redirect_stdout, suppress
+from datetime import datetime, timezone
 from pathlib import Path
 
 from agent_guard import (
@@ -22,6 +23,7 @@ from agent_guard import (
     load_policy,
     with_bundled,
 )
+from agent_guard import report as audit_report
 from agent_guard.claude_code import MODES, HookOptions, run_hook
 from agent_guard.guard import ApprovalGrant, ApprovalRequest, deny_by_default
 from agent_guard.mcp import run_proxy
@@ -666,6 +668,16 @@ def _install_claude_code(args) -> int:
     return 0 if report.ok else 1
 
 
+def _report(args) -> int:
+    path = Path(args.audit).expanduser().absolute() if args.audit else claude_code_install.default_audit_path()
+    records, unreadable = audit_report.read_audit(path)
+    summary = audit_report.summarize(path, records, unreadable)
+    home, cwd = Path.home(), Path.cwd()
+    warnings = claude_code_install.disabled_hooks_warnings(_visible_settings(home, cwd))
+    print(audit_report.render_report(summary, datetime.now(timezone.utc), warnings))
+    return 0 if audit_report.is_firing(summary) else 1
+
+
 # Starter policy for `guard init`. Dict form is the source of truth; YAML/JSON
 # serializers derive from it so an installed wheel works without package data.
 _STARTER_POLICY: dict = {
@@ -938,6 +950,17 @@ def build_parser() -> argparse.ArgumentParser:
     install_cc.add_argument("--uninstall", action="store_true", help="remove only the agent-guard hook entry")
     install_cc.add_argument("--check", action="store_true", help="verify an installed hook, including a self-test")
     install_cc.set_defaults(func=_install_claude_code)
+
+    report = sub.add_parser(
+        "report",
+        help="summarise an audit log and say whether the hook is firing",
+        description=(
+            "Reads the local audit JSONL (no network, no telemetry). Separates a hook that is not firing "
+            "from one that is firing and clean. Exits 1 when the hook is not firing."
+        ),
+    )
+    report.add_argument("--audit", help="audit JSONL file (default: the Claude Code hook's XDG state path)")
+    report.set_defaults(func=_report)
 
     return parser
 
