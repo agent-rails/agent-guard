@@ -146,6 +146,31 @@ def test_require_human_under_bypass_permissions_blocks(options):
     assert result.stderr.startswith(DENY_MARKER)
 
 
+@pytest.mark.parametrize("mode", ["default", "acceptEdits", "plan", "dontAsk"])
+def test_require_human_asks_only_in_allowlisted_permission_modes(options, mode):
+    result = run(event_bytes("git push origin main --force", permission_mode=mode), options)
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+@pytest.mark.parametrize("mode", ["bypassPermissions", "auto", "Default", "DEFAULT", "acceptedits", "", "future-mode"])
+def test_require_human_blocks_in_any_other_permission_mode(options, mode):
+    result = run(event_bytes("git push origin main --force", permission_mode=mode), options)
+    assert (result.exit_code, result.stdout) == (2, "")
+    assert result.stderr.startswith(DENY_MARKER)
+
+
+@pytest.mark.parametrize("value", [None, 7, ["default"], {"mode": "default"}])
+def test_require_human_blocks_when_permission_mode_is_missing_or_not_a_string(options, value):
+    payload = json.loads(event_bytes("git push origin main --force"))
+    if value is None:
+        del payload["permission_mode"]
+    else:
+        payload["permission_mode"] = value
+    result = run(json.dumps(payload).encode(), options)
+    assert (result.exit_code, result.stdout) == (2, "")
+
+
 @pytest.mark.parametrize(
     ("command", "decision"),
     [("echo hi", "allow"), ("rm -rf /tmp/x", "deny"), ("git push --force", "require_human")],

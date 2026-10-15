@@ -17,6 +17,7 @@ from .guard import Guard
 from .policy import load_policy
 
 MODES = ("enforce", "observe")
+ASK_PERMISSION_MODES = frozenset({"default", "acceptEdits", "plan", "dontAsk"})
 MAX_STDIN_BYTES = 32 * 1024 * 1024
 MAX_CMD_AUDIT_BYTES = 2048
 MAX_DESCRIPTION_AUDIT_BYTES = 256
@@ -197,7 +198,7 @@ def render_result(verdict: Verdict, event: HookEvent, mode: str) -> HookResult:
         return HookResult(0, "", "")
     if verdict.decision is Decision.DENY:
         return HookResult(2, "", _deny_message(verdict))
-    if event.permission_mode == "bypassPermissions":
+    if event.permission_mode not in ASK_PERMISSION_MODES:
         return HookResult(2, "", _deny_message(verdict))
     return HookResult(0, _ask_stdout(verdict), "")
 
