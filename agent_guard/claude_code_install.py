@@ -16,6 +16,7 @@ from typing import Any
 
 from .claude_code import DENY_MARKER, MODES, RECOVERY_HINT, SELFTEST_SESSION
 from .policy import load_policy
+from .report import read_audit
 
 MATCHER = "^Bash$"
 HOOK_TIMEOUT_SECONDS = 10
@@ -286,12 +287,9 @@ def _run_installed(command: str, payload: bytes) -> subprocess.CompletedProcess:
 
 
 def _audit_decision_for(audit_path: str, call_id: str) -> str | None:
-    path = Path(audit_path)
-    if not path.exists():
-        return None
+    records, _unreadable = read_audit(Path(audit_path))
     found = None
-    for line in path.read_text(encoding="utf-8").splitlines():
-        row = json.loads(line)
+    for row in records:
         if row.get("call_id") == call_id:
             found = row.get("decision")
     return found
@@ -392,11 +390,14 @@ def install(
     entry = hook_entry(command, mode, claude_version)
     written = _render(apply_hook(settings, entry))
     backup = write_settings_atomic(settings_path, written, original)
-    result = run_self_test(command, mode, str(audit))
-    if result.problems:
+    try:
+        result = run_self_test(command, mode, str(audit))
+        if result.problems:
+            problems = "; ".join(result.problems)
+            raise InstallError(f"self-test failed, settings rolled back: {problems}")
+    except BaseException:
         _rollback(settings_path, written, original)
-        problems = "; ".join(result.problems)
-        raise InstallError(f"self-test failed, settings rolled back: {problems}")
+        raise
     lines = [f"installed {mode} hook for Claude Code ({scope} scope) in {settings_path.resolve()}"]
     if mode == "observe":
         lines.append("NOT ENFORCING: observe mode audits only and never blocks")

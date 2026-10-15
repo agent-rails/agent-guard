@@ -296,6 +296,45 @@ def test_failed_self_test_removes_a_file_the_install_created(settings_path, hook
     assert not settings_path.exists()
 
 
+def test_observe_install_skips_a_corrupt_audit_line_and_still_reads_the_canary(
+    settings_path, hook_python, policy, audit
+):
+    audit.parent.mkdir(parents=True)
+    audit.write_text('{torn line\n[]\n{"call_id": "cc:selftest-canary"\n')
+    report = do_install(settings_path, hook_python, policy, audit, mode="observe")
+    assert report.ok
+    assert not any("canary" in line for line in report.lines)
+    assert len(our_hooks(read(settings_path))) == 1
+
+
+@pytest.mark.parametrize("error", [ValueError("audit exploded"), KeyboardInterrupt()])
+def test_any_exception_during_the_self_test_restores_an_existing_file(
+    settings_path, hook_python, policy, audit, monkeypatch, error
+):
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text('{"model": "opus"}\n')
+
+    def explode(*_args):
+        raise error
+
+    monkeypatch.setattr(installer, "run_self_test", explode)
+    with pytest.raises(type(error)):
+        do_install(settings_path, hook_python, policy, audit)
+    assert settings_path.read_text() == '{"model": "opus"}\n'
+
+
+def test_keyboard_interrupt_during_the_self_test_removes_a_file_the_install_created(
+    settings_path, hook_python, policy, audit, monkeypatch
+):
+    def interrupt(*_args):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(installer, "_audit_decision_for", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        do_install(settings_path, hook_python, policy, audit, mode="observe")
+    assert not settings_path.exists()
+
+
 def test_a_broken_interpreter_fails_the_self_test_and_rolls_back(settings_path, tmp_path, policy, audit):
     fake_python = tmp_path / "fake-python"
     fake_python.write_text("#!/bin/sh\nexit 0\n")
