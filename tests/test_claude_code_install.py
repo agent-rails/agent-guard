@@ -93,7 +93,7 @@ def test_build_command_golden_enforce_and_observe():
     observe = installer.build_command("/opt/venv/bin/python", "/p.json", "/a.jsonl", "observe")
     assert (
         observe == "/opt/venv/bin/python -I -m agent_guard.cli hook claude-code "
-        "--policy /p.json --audit /a.jsonl --mode observe"
+        "--policy /p.json --audit /a.jsonl --mode observe || exit 0"
     )
 
 
@@ -169,7 +169,7 @@ def test_reinstall_with_a_new_mode_replaces_the_entry(settings_path, hook_python
     do_install(settings_path, hook_python, policy, audit, mode="enforce")
     do_install(settings_path, hook_python, policy, audit, mode="observe")
     (hook,) = our_hooks(read(settings_path))
-    assert hook["command"].endswith("--mode observe")
+    assert hook["command"].endswith("--mode observe || exit 0")
 
 
 def test_entries_from_another_interpreter_are_replaced_not_duplicated():
@@ -364,7 +364,7 @@ def test_observe_install_proves_the_would_be_deny_in_the_audit_and_says_not_enfo
     assert "NOT ENFORCING: observe mode audits only and never blocks" in report.lines
     assert not any("canary" in line for line in report.lines)
     (hook,) = our_hooks(read(settings_path))
-    assert "||" not in hook["command"]
+    assert hook["command"].endswith("--mode observe || exit 0")
     rows = [json.loads(line) for line in audit.read_text().splitlines()]
     canary = [row for row in rows if row["call_id"] == "cc:selftest-canary"]
     assert [(row["decision"], row["outcome"]) for row in canary] == [("deny", "observed")]

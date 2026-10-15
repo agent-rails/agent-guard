@@ -111,7 +111,7 @@ def build_command(python: str, policy: str, audit: str, mode: str) -> str:
         raise InstallError(f"unknown mode {mode!r}; expected one of {MODES}")
     head = shlex.join([python, *ENTRY_ARGS, "--policy", policy, "--audit", audit, "--mode", mode])
     if mode == "observe":
-        return head
+        return f"{head} || exit 0"
     return f"{head} || {{ [ $? -eq 2 ] || echo {shlex.quote(RECOVERY_NOTICE)} >&2; exit 2; }}"
 
 

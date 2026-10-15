@@ -108,6 +108,25 @@ def test_observe_command_never_blocks_but_audits_the_would_be_deny(observe, audi
     assert (row["decision"], row["outcome"]) == ("deny", "observed")
 
 
+@pytest.mark.parametrize(("mode", "expected"), [("observe", 0), ("enforce", 2)])
+def test_version_skewed_command_never_blocks_in_observe_but_blocks_in_enforce(
+    hook_python, policy, audit, mode, expected
+):
+    skewed = build_command(hook_python, str(policy), str(audit), mode).replace(
+        "hook claude-code", "hook claude-codex", 1
+    )
+    result = run_installed(skewed, event("echo hi"))
+    assert result.returncode == expected
+    assert result.stdout == b""
+
+
+@pytest.mark.parametrize("body", ["exit 1", "exit 2", "exit 127", "kill -9 $$"])
+def test_observe_wrapper_turns_every_crash_into_a_pass(tmp_path, policy, audit, body):
+    command = build_command(standin(tmp_path, "crash", body), str(policy), str(audit), "observe")
+    result = run_installed(command, event("rm -rf /tmp/x"))
+    assert (result.returncode, result.stdout) == (0, b"")
+
+
 def test_observe_command_does_not_block_on_a_missing_policy(hook_python, tmp_path, audit):
     command = build_command(hook_python, str(tmp_path / "gone.json"), str(audit), "observe")
     result = run_installed(command, event("echo hi"))
