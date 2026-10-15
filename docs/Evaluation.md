@@ -37,6 +37,40 @@ What was tested and what it found — real development history, not a constructe
 | A JSON array/scalar/null/bool, or `{"tool": 123, ...}`, crashed with an unhandled traceback leaking absolute filesystem paths to stderr, instead of the documented clean "usage error" | HIGH | All five crash payloads triggered before the fix; clean exit-1 messages after. Reverting the fix turns the new tests red, confirming they aren't vacuous |
 | A `subprocess.run` monkeypatch test for "check never executes anything" could never actually fire, since `_check` never wires a dispatch function at all — the test was structurally incapable of failing | LOW | Replaced with a test patching `Guard.call`/`Guard.wrap` directly — the actual mechanism that would prove the claim if it were ever violated |
 
+### Claude Code hook: live protocol checks (Claude Code 2.1.300, macOS)
+
+Run with `claude -p --model haiku --setting-sources project --settings <throwaway file> --allowedTools Bash` from an empty scratch directory, so no user or project settings loaded. Each check asked the agent to run one Bash command whose effect is observable on disk (a marker file created, or a directory deleted), and the outcome was read from disk, not from the model's reply. A no-op hook (`exit 0`) was the control.
+
+| Check | Hook | Result |
+|---|---|---|
+| Control | `exit 0` | command ran |
+| Exit 2 blocks | `echo ... >&2; exit 2` | blocked; stderr shown to the agent |
+| Exit 1 does not block | `exit 1` | command ran |
+| Exit 3 does not block | `exit 3` | command ran |
+| Hook command runs through a shell | `cat > event.json; echo $0` | `$0` was `/bin/sh` |
+| Shell wrapper turns a missing interpreter into a block | `/nonexistent/python ... \|\| { [ $? -eq 2 ] \|\| echo ... >&2; exit 2; }` | blocked; `No such file or directory` and the wrapper's message shown |
+| `onFailure: "block"` is accepted and blocks a failing hook | `exit 1` + `onFailure: "block"` | blocked (`failed; blocking because onFailure is "block"`) |
+| Timeout without `onFailure` fails open | `sleep 8`, `timeout: 2` | **command ran** |
+| Timeout with `onFailure: "block"` | `sleep 8`, `timeout: 2`, `onFailure: "block"` | blocked (`timed out; blocking because onFailure is "block"`) |
+| Real Bash event shape | capture stdin | `tool_input` = `{command, description}`; also `session_id`, `transcript_path`, `cwd`, `prompt_id`, `permission_mode`, `effort`, `hook_event_name`, `tool_name`, `tool_use_id` |
+| Real subagent event | capture stdin from a spawned subagent | `agent_id` `ac4c6454ac6cc76c1` (hex, inside the adapter's `[A-Za-z0-9_-]` charset), `agent_type` `general-purpose` |
+| End to end, deny | installed enforce command, starter policy, `rm -rf <dir>` | blocked; directory still present; audit `deny`/`block-rm-rf`/`blocked` |
+| End to end, allow | `touch <file>` | ran; audit `allow`/`deferred` |
+| End to end, `require_human` in `-p`, `default` mode | `echo git push origin x --force > <file>` | not run; agent shown the policy reason; audit `require_human`/`ask` |
+| End to end, `require_human` under `bypassPermissions` | same | blocked (exit 2); audit `require_human`/`blocked` |
+| End to end, missing policy | installed command pointing at a deleted policy | blocked with the fault message and recovery hint; audit `fault` |
+
+Observed while checking: when Claude Code reports a blocked call to the agent, it prints the hook's full command string before the stderr message, so the policy path, the audit path and the recovery hint are visible to the agent.
+
+Not checked live: what `ask` does in an interactive session under `dontAsk` or `auto`, whether a running session picks up a settings-file edit, in-process teammate `agent_id` format, and behaviour on Claude Code versions before 2.1.295.
+
+### Claude Code hook: adapter and installer findings
+
+| Finding | Severity | Resolution |
+|---|---|---|
+| Fault records written before this fix carried no session, so the installer's own fault probe was counted as a real fault and `guard report` could not exclude it | MEDIUM | Faults after the event parses are attributed to its session and `tool_use_id`; the self-test probe is a parseable self-test event, so every self-test row is excluded. Test asserts all self-test rows carry the self-test agent id |
+| `guard report` called a hook that faults on every call `NOT FIRING`, which is the opposite of the truth in the case that matters most: enforce mode blocking everything | MEDIUM | New `FIRING, FAULTING` status, exit 0, fault timestamps count toward first and last event. Reverting the fix turns the test red |
+
 ### Package naming (`identity` -> `agentguard_identity`)
 
 | Finding | Severity | Resolution |
