@@ -1,6 +1,6 @@
 # agent-guard
 
-### The authorization and audit boundary for AI agent tool calls.
+### The authorization and audit boundary for AI agent tool calls that are dispatched through it.
 
 [![ci](https://github.com/agent-rails/agent-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/agent-rails/agent-guard/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
@@ -40,6 +40,8 @@ human approved it, or whether it executed.
 Agent Guard wraps the tool-dispatch boundary. Policy is evaluated before the
 tool runs; denied calls never reach the tool; approval-required calls fail
 closed without an approver; and the decision is written to an audit sink.
+This holds where your code owns dispatch. The [Claude Code hook](#claude-code-hook-guardrail-tier)
+sits beside a harness that owns its own tools, and is a guardrail, not a boundary.
 
 ## Why this matters
 
@@ -134,6 +136,20 @@ guarded_dispatch = guard.wrap(my_dispatch)  # my_dispatch(tool, args) -> result
 All three share one policy engine, one audit trail, one decision logic. Start with the bundled policy (`rm -rf`, `DROP TABLE`, `kubectl delete`, ... gated out of the box), tighten from there.
 
 Copy-paste runnable MCP walkthrough: [`examples/mcp/`](examples/mcp/) — a policy, a tiny server, and the exact commands (benign call forwarded, `DROP TABLE` blocked before the server sees it).
+
+## Claude Code hook (guardrail tier)
+
+```bash
+guard install claude-code --mode observe   # audit every Bash call, block nothing
+guard report                               # is it firing, and what would it have blocked?
+guard install claude-code --mode enforce   # block denies, ask on require_human
+```
+
+One command installs a `PreToolUse` hook for the Bash tool, wraps it so a crash blocks instead of allowing, and self-tests the exact installed command before reporting success. Policy rules target tool `shell` with arg `cmd`.
+
+**This is a guardrail tier, not a boundary.** It stops honest mistakes and non-adaptive prompt injection that issue a recognisable command. At user scope the agent's own Bash tool can edit the hook, the policy and the settings that load them, and regex over command text is defeated by shell indirection. It does not stop an adaptive or compromised agent. It checks Bash only. Observe mode never blocks; audit redaction is best-effort masking of known secret shapes. On Claude Code before 2.1.295 a hook that times out lets the command run. See [`docs/claude-code-hook.md`](docs/claude-code-hook.md) for the decision table, the fail-closed matrix by version, and the recovery runbook.
+
+Do not wire `guard check` straight into a hook: it exits 3 and 4, which Claude Code treats as non-blocking, so it blocks nothing.
 
 ## 30-second use
 
