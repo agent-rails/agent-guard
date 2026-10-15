@@ -354,6 +354,60 @@ def test_redaction_masks_secrets_but_policy_sees_the_raw_command(options):
     assert len(row["args"]["cmd_sha256"]) == 64
 
 
+@pytest.mark.parametrize(
+    ("command", "secret"),
+    [
+        ("git clone ssh://deploy:hunter2@git.example/repo", "hunter2"),
+        ("psql postgres://admin:pgsecret@db.example/app", "pgsecret"),
+        ("redis-cli -u redis://:redispass@cache.example:6379", "redispass"),
+        ("git clone https://ghtokenonly@github.com/o/r", "ghtokenonly"),
+        ("curl -H 'X-Api-Key: abc123key' https://api.example", "abc123key"),
+        ("curl -H 'x-api-key:lowerkey' https://api.example", "lowerkey"),
+        ("mysql -uroot -pMyS3cret appdb", "MyS3cret"),
+        ("mysqldump -h db -pdumppass appdb", "dumppass"),
+        ("curl -u alice:curlpass https://api.example", "curlpass"),
+        ("curl -ualice:curlpass2 https://api.example", "curlpass2"),
+        ("curl --user 'bob:quotedpass' https://api.example", "quotedpass"),
+        ("vault login --password hunter3", "hunter3"),
+        ("vault login --password=hunter4", "hunter4"),
+        ('API_KEY="my secret value" ./deploy.sh', "value"),
+        ("DB_PASSWORD='two words' ./migrate", "words"),
+    ],
+)
+def test_redaction_masks_each_listed_secret_shape(command, secret):
+    stored = redact_for_audit(map_tool_call(parse_event(event_bytes(command))))["cmd"]
+    assert secret not in stored
+    assert "***" in stored
+
+
+def test_redaction_leaves_ordinary_flags_alone():
+    for command in ("mkdir -p build/out", "docker run -p 8080:80 img", "git push -u origin main"):
+        assert redact_for_audit(map_tool_call(parse_event(event_bytes(command))))["cmd"] == command
+
+
+def test_symlinked_audit_path_is_refused_and_its_target_untouched(options, tmp_path):
+    target = tmp_path / "elsewhere.jsonl"
+    target.write_text("")
+    link = tmp_path / "link.jsonl"
+    link.symlink_to(target)
+    linked = HookOptions(options.policy_path, str(link), "enforce")
+    result = run(event_bytes("echo hi"), linked)
+    assert result.exit_code == 2
+    assert result.stderr.startswith("agent-guard fault, command blocked: OSError")
+    assert target.read_text() == ""
+    assert run(event_bytes("echo hi"), observe(linked)).exit_code == 0
+    assert target.read_text() == ""
+
+
+def test_pre_existing_world_readable_audit_file_is_made_private(options):
+    path = __import__("pathlib").Path(options.audit_path)
+    path.parent.mkdir(parents=True)
+    path.write_text("")
+    path.chmod(0o644)
+    run(event_bytes("echo hi"), options)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
 def test_audit_command_is_truncated_but_hash_and_length_cover_the_whole_command():
     command = "echo " + "a" * 5000
     call = map_tool_call(parse_event(event_bytes(command)))

@@ -28,11 +28,21 @@ RECOVERY_HINT = "Recovery from a terminal: guard install claude-code --check."
 
 _SAFE_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
+_SECRET_VALUE = r"(?:\"[^\"]*\"|'[^']*'|[^\s'\"]+)"
 _REDACTIONS: tuple[tuple[Any, str], ...] = (
-    (re2.compile(r"(?i)(https?://)[^/\s:@]+:[^/\s@]+@"), r"\1***@"),
+    (re2.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://)[^/\s@]+@"), r"\1***@"),
     (re2.compile(r"(?i)(authorization:\s*\S+\s+)\S+"), r"\1***"),
     (re2.compile(r"(?i)\b(bearer\s+)\S+"), r"\1***"),
-    (re2.compile(r"(?i)\b([A-Za-z0-9_]*(?:token|secret|passw(?:or)?d|api[_-]?key|auth)[A-Za-z0-9_]*=)\S+"), r"\1***"),
+    (re2.compile(r"(?i)(x-api-key\s*:\s*)[^\s'\"]+"), r"\1***"),
+    (
+        re2.compile(
+            r"(?i)\b([A-Za-z0-9_]*(?:token|secret|passw(?:or)?d|api[_-]?key|auth)[A-Za-z0-9_]*=)" + _SECRET_VALUE
+        ),
+        r"\1***",
+    ),
+    (re2.compile(r"(?i)(--password\s+)" + _SECRET_VALUE), r"\1***"),
+    (re2.compile(r"(\s(?:-u|--user)\s*['\"]?[^\s:'\"]+:)[^\s'\"]+"), r"\1***"),
+    (re2.compile(r"(?i)(\b(?:mysql|mysqldump|mysqladmin|mariadb)\b[^;&|\n]*?\s-p)[^\s'\"]+"), r"\1***"),
     (re2.compile(r"\b(sk-|ghp_|github_pat_|AKIA|xox[abp]-)[A-Za-z0-9_\-]+"), r"\1***"),
 )
 
@@ -80,8 +90,9 @@ class _PrivateJsonlSink:
     def write(self, record: AuditRecord) -> None:
         self._path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         line = (json.dumps(asdict(record)) + "\n").encode("utf-8")
-        descriptor = os.open(self._path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        descriptor = os.open(self._path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         try:
+            os.fchmod(descriptor, 0o600)
             written = os.write(descriptor, line)
         finally:
             os.close(descriptor)
