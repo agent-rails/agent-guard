@@ -16,7 +16,26 @@ done
 | 1st (cold) | 1.74s — one-time outlier, not reproduced on any subsequent run; not investigated further since it never recurred, but reported honestly rather than discarded |
 | 2nd–8th | 0.08s – 0.10s |
 
-**Steady state: ~90ms per invocation.** This is dominated by Python/CLI process startup (`argparse`, imports), not policy evaluation itself — the actual `Policy.evaluate()` call is a handful of regex matches over one rendered string, effectively free next to interpreter startup. Relevant for anyone considering `guard check` as a per-call hook (a Claude Code `PreToolUse` hook firing on every `Edit`/`Write`, for instance): this is the real, measured cost of that design, not a guess — see `docs/DESIGN.md`'s note on this exact tradeoff.
+**Steady state: ~90ms per invocation.** This is dominated by Python/CLI process startup (`argparse`, imports), not policy evaluation itself — the actual `Policy.evaluate()` call is a handful of regex matches over one rendered string, effectively free next to interpreter startup.
+
+> **Warning:** do not wire `guard check` directly as a Claude Code `PreToolUse` hook. It exits 3 for deny and 4 for require_human, and Claude Code treats every exit code other than 0 and 2 as non-blocking, so it blocks nothing. Use `guard install claude-code` (see `docs/claude-code-hook.md`).
+
+## `guard hook claude-code` latency
+
+The exact installed command, run through `sh -c` with a minimal environment, against a captured Claude Code Bash event and the starter policy (macOS, Python 3.12):
+
+```bash
+for i in $(seq 1 8); do
+  /usr/bin/time -p env -i PATH=/usr/bin:/bin sh -c "$INSTALLED_COMMAND" < event.json 2>&1 | grep real
+done
+```
+
+| Run | Wall time |
+|---|---|
+| 1st | 0.08s |
+| 2nd–8th | 0.06s – 0.07s |
+
+**Steady state: ~60–70ms added to every Bash tool call**, again dominated by interpreter startup.
 
 ## Test suite
 
