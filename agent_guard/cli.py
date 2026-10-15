@@ -7,7 +7,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
-from contextlib import suppress
+from contextlib import redirect_stdout, suppress
 from pathlib import Path
 
 from agent_guard import (
@@ -21,6 +21,7 @@ from agent_guard import (
     load_policy,
     with_bundled,
 )
+from agent_guard.claude_code import MODES, HookOptions, run_hook
 from agent_guard.guard import ApprovalGrant, ApprovalRequest, deny_by_default
 from agent_guard.mcp import run_proxy
 from agentguard_identity import Broker, ContainerRuntime, LocalAttestor, LocalRuntime, RefusedError, RuntimeSpec
@@ -602,6 +603,17 @@ def _check(args) -> int:
     return 4
 
 
+def _hook_claude_code(args) -> int:
+    options = HookOptions(args.policy, args.audit, args.mode)
+    with redirect_stdout(sys.stderr):
+        result = run_hook(sys.stdin.buffer, options)
+    sys.stdout.write(result.stdout)
+    sys.stdout.flush()
+    if result.stderr:
+        print(result.stderr, file=sys.stderr)
+    return result.exit_code
+
+
 # Starter policy for `guard init`. Dict form is the source of truth; YAML/JSON
 # serializers derive from it so an installed wheel works without package data.
 _STARTER_POLICY: dict = {
@@ -840,6 +852,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="overwrite an existing file",
     )
     init.set_defaults(func=_init)
+
+    hook = sub.add_parser("hook", help="harness hook adapters (stdin event in, harness exit code out)")
+    hook_sub = hook.add_subparsers(dest="harness", required=True)
+    claude_code = hook_sub.add_parser(
+        "claude-code",
+        help="Claude Code PreToolUse hook: deny exits 2, require_human asks, allow defers",
+        description=(
+            "Reads one PreToolUse event from stdin. Faults exit 2 in enforce mode. "
+            "Wire it through `guard install claude-code`; wiring it by hand loses the shell wrapper "
+            "that turns a crash before this process runs into a block."
+        ),
+    )
+    claude_code.add_argument("--policy", required=True, help="policy file (yaml/json); never falls back to defaults")
+    claude_code.add_argument("--audit", required=True, help="append audit records to this JSONL file")
+    claude_code.add_argument("--mode", required=True, choices=MODES, help="enforce blocks; observe only audits")
+    claude_code.set_defaults(func=_hook_claude_code)
 
     return parser
 
