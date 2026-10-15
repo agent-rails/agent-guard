@@ -146,6 +146,43 @@ def test_unreadable_lines_are_counted_not_fatal(policy, audit):
     assert "unreadable audit lines: 2" in render(audit)
 
 
+def test_rows_with_a_bad_schema_are_counted_unreadable_not_fatal(policy, audit, capsys):
+    hook(policy, audit, "echo hi")
+    bad_rows = [
+        {"agent_id": "claude-code:x", "decision": "allow"},
+        {"ts": 5, "agent_id": "claude-code:x", "decision": "allow"},
+        {"ts": "yesterday", "agent_id": "claude-code:x", "decision": "allow"},
+        {"ts": "2026-10-15T10:00:00", "agent_id": "claude-code:x", "decision": "allow"},
+        ["not", "a", "dict"],
+    ]
+    with audit.open("a", encoding="utf-8") as handle:
+        for row in bad_rows:
+            handle.write(json.dumps(row) + "\n")
+    lines = render(audit)
+    assert lines[1] == "FIRING, CLEAN: 1 calls checked, none denied, gated or faulted"
+    assert "unreadable audit lines: 5" in lines
+    assert main(["report", "--audit", str(audit)]) == 0
+    capsys.readouterr()
+
+
+def test_control_characters_in_audit_text_are_escaped_when_printed(audit):
+    audit.parent.mkdir(parents=True)
+    hostile = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "agent_id": "claude-code:\x1b[31mEVIL\x07",
+        "decision": "deny",
+        "rule_id": "rule\x1b]0;title\x07",
+        "outcome": "blocked",
+    }
+    audit.write_text(json.dumps(hostile) + "\n")
+    text = report.render_report(summary_of(audit), datetime.now(timezone.utc), ["warn\x1b[2J"])
+    assert "\x1b" not in text
+    assert "\x07" not in text
+    assert "claude-code:\\x1b[31mEVIL\\x07" in text
+    assert "rule\\x1b]0;title\\x07 (1)" in text
+    assert "WARNING: warn\\x1b[2J" in text
+
+
 def test_cli_report_warns_when_hooks_are_disabled_in_the_project(policy, audit, tmp_path, capsys):
     hook(policy, audit, "echo hi")
     local = tmp_path / "project" / ".claude" / "settings.local.json"

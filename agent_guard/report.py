@@ -43,11 +43,25 @@ def read_audit(path: Path) -> tuple[list[dict], int]:
         except ValueError:
             unreadable += 1
             continue
-        if isinstance(record, dict):
+        if _is_valid_row(record):
             records.append(record)
         else:
             unreadable += 1
     return records, unreadable
+
+
+def _is_valid_row(record: object) -> bool:
+    if not isinstance(record, dict) or not isinstance(record.get("ts"), str):
+        return False
+    try:
+        stamp = datetime.fromisoformat(record["ts"])
+    except ValueError:
+        return False
+    return stamp.tzinfo is not None
+
+
+def _printable(value: object) -> str:
+    return "".join(ch if ch.isprintable() else ch.encode("unicode_escape").decode("ascii") for ch in str(value))
 
 
 def summarize(path: Path, records: list[dict], unreadable: int) -> Summary:
@@ -122,8 +136,8 @@ def _age(last: str, now: datetime) -> str:
 
 
 def render_report(summary: Summary, now: datetime, warnings: list[str]) -> str:
-    lines = [f"audit: {summary.path}", _status(summary)]
-    lines += [f"WARNING: {warning}" for warning in warnings]
+    lines = [f"audit: {_printable(summary.path)}", _printable(_status(summary))]
+    lines += [f"WARNING: {_printable(warning)}" for warning in warnings]
     if summary.first and summary.last:
         lines.append(f"first event: {summary.first}")
         lines.append(f"last event: {summary.last} ({_age(summary.last, now)})")
@@ -138,9 +152,11 @@ def render_report(summary: Summary, now: datetime, warnings: list[str]) -> str:
         )
         lines.append(f"observed (would have): blocked {summary.would_deny}, asked {summary.would_ask}")
         if summary.top_rules:
-            lines.append("top rules: " + ", ".join(f"{rule} ({count})" for rule, count in summary.top_rules))
+            lines.append(
+                "top rules: " + ", ".join(f"{_printable(rule)} ({count})" for rule, count in summary.top_rules)
+            )
         lines.append(f"sessions: {len(summary.sessions)}")
-        lines += [f"  {agent}: {count}" for agent, count in summary.sessions.most_common(TOP_SESSIONS)]
+        lines += [f"  {_printable(agent)}: {count}" for agent, count in summary.sessions.most_common(TOP_SESSIONS)]
     lines.append(f"faults: {summary.faults}")
     if summary.selftest_events:
         lines.append(f"self-test events (excluded): {summary.selftest_events}")
