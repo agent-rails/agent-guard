@@ -646,7 +646,7 @@ def _install_claude_code(args) -> int:
         if args.uninstall:
             report = claude_code_install.uninstall(settings_path)
         elif args.check:
-            report = claude_code_install.check(settings_path, version, visible)
+            report = claude_code_install.check(settings_path, sys.executable, version, visible)
         else:
             if args.mode is None:
                 raise claude_code_install.InstallError("--mode enforce|observe is required")

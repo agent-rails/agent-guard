@@ -396,22 +396,22 @@ def installed(settings_path, hook_python, policy, audit, **kwargs):
 
 def test_check_passes_on_a_healthy_install(settings_path, hook_python, policy, audit):
     installed(settings_path, hook_python, policy, audit)
-    report = installer.check(settings_path, None, [])
+    report = installer.check(settings_path, hook_python, None, [])
     assert report.ok
     assert report.lines[-1] == "command verified; firing inside Claude Code not verified"
 
 
 def test_check_flags_missing_entry_duplicates_and_stale_matcher(settings_path, hook_python, policy, audit):
-    assert not installer.check(settings_path, None, []).ok
+    assert not installer.check(settings_path, hook_python, None, []).ok
     settings = installed(settings_path, hook_python, policy, audit)
     duplicated = json.loads(json.dumps(settings))
     duplicated["hooks"]["PreToolUse"].append(duplicated["hooks"]["PreToolUse"][0])
     settings_path.write_text(json.dumps(duplicated))
-    assert "2 agent-guard hook entries" in installer.check(settings_path, None, []).lines[0]
+    assert "2 agent-guard hook entries" in installer.check(settings_path, hook_python, None, []).lines[0]
     stale = json.loads(json.dumps(settings))
     stale["hooks"]["PreToolUse"][0]["matcher"] = "^(Bash|Write)$"
     settings_path.write_text(json.dumps(stale))
-    report = installer.check(settings_path, None, [])
+    report = installer.check(settings_path, hook_python, None, [])
     assert not report.ok
     assert "stale matcher" in report.lines[0]
 
@@ -419,20 +419,57 @@ def test_check_flags_missing_entry_duplicates_and_stale_matcher(settings_path, h
 def test_check_flags_a_deleted_policy_and_a_missing_interpreter(settings_path, hook_python, policy, audit):
     installed(settings_path, hook_python, policy, audit)
     policy.unlink()
-    report = installer.check(settings_path, None, [])
+    report = installer.check(settings_path, hook_python, None, [])
     assert not report.ok
     assert "does not load" in report.lines[0]
     policy.write_text(json.dumps(POLICY))
     text = settings_path.read_text().replace(hook_python, "/nonexistent/python")
     settings_path.write_text(text)
-    assert "missing or not executable" in installer.check(settings_path, None, []).lines[0]
+    report = installer.check(settings_path, hook_python, None, [])
+    assert not report.ok
+    assert "hook interpreter /nonexistent/python is not the interpreter running this guard" in report.lines[0]
 
 
 def test_check_warns_when_on_failure_is_supported_but_absent(settings_path, hook_python, policy, audit):
     installed(settings_path, hook_python, policy, audit, version=OLD_CLAUDE)
-    report = installer.check(settings_path, NEW_CLAUDE, [])
+    report = installer.check(settings_path, hook_python, NEW_CLAUDE, [])
     assert report.ok
     assert any("supports onFailure" in line for line in report.lines)
+
+
+def write_project_hook(tmp_path, command: str) -> Path:
+    project_settings = tmp_path / "project" / ".claude" / "settings.json"
+    project_settings.parent.mkdir(parents=True, exist_ok=True)
+    group = {"matcher": "^Bash$", "hooks": [{"type": "command", "command": command, "timeout": 10}]}
+    project_settings.write_text(json.dumps({"hooks": {"PreToolUse": [group]}}))
+    return project_settings
+
+
+@pytest.mark.parametrize("mode", ["enforce", "observe"])
+def test_check_refuses_a_tampered_project_command_and_never_runs_it(
+    monkeypatch, hook_python, policy, audit, tmp_path, capsys, mode
+):
+    monkeypatch.setattr(sys, "executable", hook_python)
+    marker = tmp_path / "MARKER"
+    command = installer.build_command(hook_python, str(policy), str(audit), mode) + f"; touch {marker}"
+    write_project_hook(tmp_path, command)
+    assert main(["install", "claude-code", "--check", "--scope", "project"]) == 1
+    out = capsys.readouterr().out
+    assert out.startswith("PROBLEM: installed command ")
+    assert "refusing to run it" in out
+    assert not marker.exists()
+    assert not audit.exists()
+
+
+def test_check_refuses_an_interpreter_other_than_the_running_one(monkeypatch, policy, audit, tmp_path, capsys):
+    marker = tmp_path / "MARKER"
+    impostor = tmp_path / "project" / "impostor"
+    impostor.write_text(f"#!/bin/sh\ntouch {marker}\nexit 2\n")
+    impostor.chmod(0o755)
+    write_project_hook(tmp_path, installer.build_command(str(impostor), str(policy), str(audit), "enforce"))
+    assert main(["install", "claude-code", "--check", "--scope", "project"]) == 1
+    assert f"PROBLEM: hook interpreter {impostor} is not the interpreter running this guard" in capsys.readouterr().out
+    assert not marker.exists()
 
 
 def test_cli_install_check_uninstall_round_trip_with_the_default_starter_policy(

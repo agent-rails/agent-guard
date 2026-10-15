@@ -93,11 +93,23 @@ def is_ours(command: Any) -> bool:
 
 def parse_command(command: str) -> dict[str, str]:
     tokens = _tokens(command)
-    parsed = {"python": tokens[0]}
-    for flag in ("--policy", "--audit", "--mode"):
-        if flag not in tokens or tokens.index(flag) + 1 >= len(tokens):
-            raise InstallError(f"installed command is missing {flag}")
-        parsed[flag[2:]] = tokens[tokens.index(flag) + 1]
+    flags_at = len(ENTRY_ARGS) + 1
+    shaped = (
+        len(tokens) >= flags_at + 6
+        and tokens[1:flags_at] == list(ENTRY_ARGS)
+        and tokens[flags_at : flags_at + 6 : 2] == ["--policy", "--audit", "--mode"]
+        and tokens[flags_at + 5] in MODES
+    )
+    if not shaped:
+        raise InstallError("installed command does not have the shape guard install writes; refusing to run it")
+    parsed = {
+        "python": tokens[0],
+        "policy": tokens[flags_at + 1],
+        "audit": tokens[flags_at + 3],
+        "mode": tokens[flags_at + 5],
+    }
+    if build_command(parsed["python"], parsed["policy"], parsed["audit"], parsed["mode"]) != command:
+        raise InstallError("installed command differs from what guard install writes; refusing to run it")
     return parsed
 
 
@@ -391,16 +403,29 @@ def _our_hooks(settings: dict[str, Any]) -> list[tuple[dict[str, Any], dict[str,
     return found
 
 
-def _check_entry(group: dict[str, Any], hook: dict[str, Any], version: tuple[int, int, int] | None) -> Report:
-    parsed = parse_command(hook["command"])
+def _check_entry(
+    group: dict[str, Any], hook: dict[str, Any], python: str, version: tuple[int, int, int] | None
+) -> Report:
+    try:
+        parsed = parse_command(hook["command"])
+    except InstallError as err:
+        return Report(False, [f"PROBLEM: {err}; re-run guard install claude-code"])
+    if parsed["python"] != python:
+        return Report(
+            False,
+            [
+                f"PROBLEM: hook interpreter {parsed['python']} is not the interpreter running this guard ({python}); "
+                "run --check with the hook's own guard, or re-run guard install claude-code from the environment "
+                "the hook should use"
+            ],
+        )
+    command = build_command(parsed["python"], parsed["policy"], parsed["audit"], parsed["mode"])
     problems: list[str] = []
     warnings: list[str] = []
     if group.get("matcher") != MATCHER:
         problems.append(
             f"stale matcher {group.get('matcher')!r}, expected {MATCHER!r}: re-run guard install claude-code"
         )
-    if not os.access(parsed["python"], os.X_OK):
-        problems.append(f"interpreter {parsed['python']} is missing or not executable")
     try:
         load_policy(parsed["policy"])
     except Exception as err:
@@ -412,7 +437,7 @@ def _check_entry(group: dict[str, Any], hook: dict[str, Any], version: tuple[int
             )
     if problems:
         return Report(False, [f"PROBLEM: {problem}" for problem in problems] + [f"WARNING: {w}" for w in warnings])
-    result = run_self_test(hook["command"], parsed["mode"], parsed["audit"])
+    result = run_self_test(command, parsed["mode"], parsed["audit"])
     lines = [f"mode: {parsed['mode']}", f"policy: {parsed['policy']}", f"audit: {parsed['audit']}"]
     lines += [f"PROBLEM: {problem}" for problem in result.problems]
     lines += [f"WARNING: {warning}" for warning in warnings + result.warnings]
@@ -421,7 +446,9 @@ def _check_entry(group: dict[str, Any], hook: dict[str, Any], version: tuple[int
     return Report(not result.problems, lines)
 
 
-def check(settings_path: Path, claude_version: tuple[int, int, int] | None, visible_settings: list[Path]) -> Report:
+def check(
+    settings_path: Path, python: str, claude_version: tuple[int, int, int] | None, visible_settings: list[Path]
+) -> Report:
     settings, _original = load_settings(settings_path)
     ours = _our_hooks(settings)
     if not ours:
@@ -429,6 +456,6 @@ def check(settings_path: Path, claude_version: tuple[int, int, int] | None, visi
     if len(ours) > 1:
         return Report(False, [f"PROBLEM: {len(ours)} agent-guard hook entries; re-run guard install claude-code"])
     group, hook = ours[0]
-    report = _check_entry(group, hook, claude_version)
+    report = _check_entry(group, hook, python, claude_version)
     warnings = [f"WARNING: {warning}" for warning in disabled_hooks_warnings(visible_settings)]
     return Report(report.ok, [*report.lines, *warnings])
