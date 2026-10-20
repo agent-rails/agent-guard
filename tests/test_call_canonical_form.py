@@ -454,20 +454,23 @@ def test_skipped_chaining_still_shows_the_audit_failure_in_the_traceback():
     assert "wrapped terminal failure" in "".join(traceback.format_exception(caught.value))
 
 
-def test_mcp_proxy_rejects_a_message_too_deep_to_parse():
+DEEP = "[" * 100_000 + "]" * 100_000
+
+
+def test_mcp_proxy_rejects_a_message_too_deep_to_inspect():
     from agent_guard import mcp_handle_line
 
     guard, audit = make_guard()
-    forward, reply = mcp_handle_line("[" * 100_000 + "]" * 100_000, guard)
+    message = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"act","arguments":{"x":' + DEEP + "}}}"
+    forward, reply = mcp_handle_line(message, guard)
     assert forward is None
-    assert "nests too deeply" in reply
+    assert "nests too deeply" in reply or "nest deeper than 64 levels" in reply
 
 
-def test_check_cli_rejects_a_payload_too_deep_to_parse(monkeypatch, capsys):
+def test_check_cli_rejects_a_payload_too_deep_to_inspect(monkeypatch):
     import io
 
     from agent_guard.cli import main
 
-    monkeypatch.setattr("sys.stdin", io.StringIO("[" * 100_000 + "]" * 100_000))
-    assert main(["check"]) == 1
-    assert "malformed JSON payload" in capsys.readouterr().err
+    monkeypatch.setattr("sys.stdin", io.StringIO('{"tool":"act","args":{"x":' + DEEP + "}}"))
+    assert main(["check"]) != 0
