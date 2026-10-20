@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import json
 
 import pytest
 
@@ -454,20 +455,62 @@ def test_skipped_chaining_still_shows_the_audit_failure_in_the_traceback():
     assert "wrapped terminal failure" in "".join(traceback.format_exception(caught.value))
 
 
-def test_mcp_proxy_rejects_a_message_too_deep_to_parse():
+def _nested(depth):
+    return "[" * depth + "]" * depth
+
+
+def _tools_call(arguments_json):
+    return (
+        '{"jsonrpc":"2.0","id":1,"method":"tools/call",'
+        '"params":{"name":"act","arguments":{"x":' + arguments_json + "}}}"
+    )
+
+
+def test_mcp_proxy_denies_arguments_nested_past_the_depth_limit():
     from agent_guard import mcp_handle_line
 
     guard, audit = make_guard()
-    forward, reply = mcp_handle_line("[" * 100_000 + "]" * 100_000, guard)
+    forward, reply = mcp_handle_line(_tools_call(_nested(65)), guard)
     assert forward is None
-    assert "nests too deeply" in reply
+    parsed = json.loads(reply)
+    assert parsed["id"] == 1
+    assert parsed["result"]["isError"] is True
+    assert "nest deeper than 64 levels" in parsed["result"]["content"][0]["text"]
+    assert [(r.decision, r.rule_id, r.executed) for r in audit.records] == [("deny", "args-not-canonical", False)]
 
 
-def test_check_cli_rejects_a_payload_too_deep_to_parse(monkeypatch, capsys):
+def test_check_cli_denies_arguments_nested_past_the_depth_limit(monkeypatch, capsys):
     import io
 
     from agent_guard.cli import main
 
-    monkeypatch.setattr("sys.stdin", io.StringIO("[" * 100_000 + "]" * 100_000))
+    payload = '{"tool":"act","args":{"x":' + _nested(65) + "}}"
+    monkeypatch.setattr("sys.stdin", io.StringIO(payload))
+    assert main(["check"]) == 3
+    assert "args-not-canonical" in capsys.readouterr().out
+
+
+def _recursion_error(*args, **kwargs):
+    raise RecursionError("maximum recursion depth exceeded while decoding a JSON array")
+
+
+def test_mcp_proxy_rejects_a_message_the_parser_cannot_nest(monkeypatch):
+    from agent_guard import mcp_handle_line
+
+    guard, audit = make_guard()
+    monkeypatch.setattr("json.loads", _recursion_error)
+    forward, reply = mcp_handle_line(_tools_call("[]"), guard)
+    assert forward is None
+    assert '"id": null' in reply
+    assert "nests too deeply to inspect" in reply
+
+
+def test_check_cli_rejects_a_payload_the_parser_cannot_nest(monkeypatch, capsys):
+    import io
+
+    from agent_guard.cli import main
+
+    monkeypatch.setattr("sys.stdin", io.StringIO('{"tool":"act","args":{}}'))
+    monkeypatch.setattr("json.loads", _recursion_error)
     assert main(["check"]) == 1
     assert "malformed JSON payload" in capsys.readouterr().err
