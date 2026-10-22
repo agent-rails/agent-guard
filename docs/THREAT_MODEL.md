@@ -14,7 +14,7 @@ What agent-guard defends against, per pillar, framed as Prevent / Contain / Dete
 | Actor | Trust level |
 |---|---|
 | The human operator | Trusted, but can misconfigure a policy or skip `from_token` |
-| The AI agent itself | Semi-trusted — assumed capable of being prompt-injected or hallucinating a destructive action; **not** assumed malicious by design, but the boundary is built as if it could be |
+| The AI agent itself | Semi-trusted — assumed capable of being prompt-injected or hallucinating a destructive action; **not** assumed malicious by design, but where agent-guard owns dispatch the boundary is built as if it could be. The Claude Code hook (Pillar 6) does not own dispatch and is not built to that bar |
 | Content fetched by the agent (web pages, tool output, files) | Untrusted — the classic prompt-injection vector |
 | A remote/external execution node | Trust varies by attested tier; a `local.container` identity is not trusted the same as a `remote.microvm` one |
 | A downstream verifier of tokens or audit records | Trusts only what it can cryptographically check — a bearer token or an unsigned record is trusted on possession alone |
@@ -104,6 +104,37 @@ This is the newest, and the one where the actual attack surface is a different s
 **Prevent:** malformed-but-syntactically-valid JSON (a bare array, `null`, a non-string `tool`) previously reached unvalidated code paths and crashed with an unhandled traceback that leaked absolute filesystem paths to stderr; this now fails closed with a clean, documented error (exit 1) instead.
 
 **Explicit non-goal:** `check` never executes the underlying action itself (`executed` is always `False` in its audit records) — it is a decision oracle; the caller is responsible for acting on the exit code, and nothing here guarantees the caller does so correctly.
+
+**Wired directly as a Claude Code hook, `guard check` blocks nothing.** It exits 3 (deny), 4 (require_human) and 1 (error). Claude Code treats every exit code other than 0 and 2 as a non-blocking error and runs the command. Use `guard hook claude-code` (Pillar 6) instead.
+
+## Pillar 6 — the Claude Code hook (`guard hook claude-code`)
+
+**Tier: guardrail, not a boundary.** The hook stops honest agent mistakes and non-adaptive prompt injection that issue a recognisable Bash command. It does not stop an adaptive or compromised agent. Claude Code owns tool execution, and at user, local or project scope the hook, its policy, its audit log, the Python environment and the settings files that load the hook are writable by the same user the agent's Bash tool runs as.
+
+**Prevent:**
+- A recognisable destructive Bash command that the policy denies: the hook exits 2 and Claude Code does not run the command.
+- Fail-open on adapter faults. Malformed input, an unexpected event or tool shape, a missing or unloadable policy, an unwritable audit log and any exception inside the adapter all exit 2 in enforce mode. A given policy that fails to load never falls back to built-in defaults.
+- Fail-open on crashes before Python runs. The installed command is wrapped in `|| { ...; exit 2; }`, so a missing interpreter, an import error or a kill blocks. On Claude Code 2.1.295 and later, install also sets `onFailure: "block"`, which covers hook timeouts.
+- Auto-approval. The hook never emits `permissionDecision: "allow"`; a policy `allow` defers to Claude Code's own permission flow.
+- Interpreter hijack via `PATH`, `PYTHONPATH` or user site-packages: absolute interpreter path and `python -I`.
+- Blocking from observe mode. The observe command ends in `|| exit 0`, so a crash or a version-skewed argparse error cannot block.
+- `require_human` turning into a silent pass. `ask` is returned only in permission modes `default`, `acceptEdits`, `plan` and `dontAsk`; any other, missing or non-string mode exits 2. Any `tool_name` other than exactly `Bash` is a fault.
+- Running persisted text from `--check`. A repository-controlled `.claude/settings.json` could hold a tampered hook command. `--check` rebuilds the command from its parsed fields, refuses on any difference or when the interpreter is not the one running `guard`, and runs only the rebuilt string.
+- A half-applied install. Any exception during the post-write self-test, including Ctrl-C, restores the original settings and re-raises.
+- An audit log redirected through a symlink, or left world-readable: `O_NOFOLLOW` on the final path component and `0600` on every write.
+
+**Detect:** every checked call and every fault the adapter can observe is written to a `0600` JSONL audit log keyed by `cc:<tool_use_id>`. The stored command is redacted, and the full command is covered by `cmd_sha256`. `guard report` separates a hook that is not firing from one that is firing and clean, and flags one that is faulting on every call.
+
+**Explicit non-goals and residuals:**
+- An agent with Bash can disable the hook: edit or delete the settings entry, the policy or the Python environment, set `disableAllHooks`, or start a nested `claude --bare` or `--safe-mode` session. The installer's starter policy requires a human before a Bash command names `guard install`, `agent_guard`, `disableAllHooks`, `.claude/settings` or the literal policy and audit paths. That is a speed bump against a non-adaptive agent: `~`, `$HOME`, relative or variable spellings, the Write and Edit tools, and a user-supplied `--policy` all bypass it. A managed-settings install is not part of this release.
+- Regex over command text is defeated by shell indirection. The starter catches case and flag-order variants of `rm -rf` and force push within one simple command; known gaps include quoting inside the name (`r''m -rf`), variables and aliases, command substitution and backticks, abbreviated long options, encoded payloads piped to `sh`, interpreter one-liners, `find -delete`, flags split across `;`/`&&`/`|`, and writing a script then running it. Each call is judged alone; sequences are not.
+- Only the Bash tool is checked. Write, Edit, MultiEdit, NotebookEdit and MCP tools are not.
+- On Claude Code before 2.1.295, a hook that exceeds its timeout lets the command run. In `-p` mode Claude Code silently ignores a settings file that fails its validation, so the hook is not loaded at all.
+- After a deny the agent can rephrase the command into one the policy does not match. Observe-mode data does not predict enforce behaviour.
+- When Claude Code shows a block to the agent it includes the full hook command, which discloses the policy and audit paths. The uninstall command is not in any agent-visible text.
+- Settings writes check for a concurrent change twice, but a writer that lands between the final check and the rename is overwritten. Backups accumulate and are never pruned.
+- Audit redaction is best-effort masking of the listed shapes; other secrets in command text are stored.
+- The audit log is attribution, not attestation: it is written by a process the agent's user can tamper with, and records are unsigned.
 
 ## Residual risks, consolidated
 

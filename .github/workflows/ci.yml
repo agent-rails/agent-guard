@@ -22,6 +22,27 @@ jobs:
       - run: python -m pytest -q
       - run: python examples/end_to_end.py
 
+  claude-code-hook:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -e ".[dev]"
+      - name: Hook subprocess, install and report suites through the real shell
+        run: >-
+          python -m pytest -q -p no:cacheprovider
+          tests/test_claude_code_hook_subprocess.py
+          tests/test_claude_code_install.py
+          tests/test_claude_code_hook.py
+          tests/test_report.py
+
   gvisor:
     runs-on: ubuntu-latest
     steps:

@@ -7,7 +7,8 @@ import shlex
 import subprocess
 import sys
 import tempfile
-from contextlib import suppress
+from contextlib import redirect_stdout, suppress
+from datetime import datetime, timezone
 from pathlib import Path
 
 from agent_guard import (
@@ -18,9 +19,12 @@ from agent_guard import (
     JsonlAuditSink,
     MemoryAuditSink,
     Policy,
+    claude_code_install,
     load_policy,
     with_bundled,
 )
+from agent_guard import report as audit_report
+from agent_guard.claude_code import MODES, HookOptions, run_hook
 from agent_guard.guard import ApprovalGrant, ApprovalRequest, deny_by_default
 from agent_guard.mcp import run_proxy
 from agentguard_identity import Broker, ContainerRuntime, LocalAttestor, LocalRuntime, RefusedError, RuntimeSpec
@@ -602,6 +606,79 @@ def _check(args) -> int:
     return 4
 
 
+def _hook_claude_code(args) -> int:
+    options = HookOptions(args.policy, args.audit, args.mode)
+    with redirect_stdout(sys.stderr):
+        result = run_hook(sys.stdin.buffer, options)
+    sys.stdout.write(result.stdout)
+    sys.stdout.flush()
+    if result.stderr:
+        print(result.stderr, file=sys.stderr)
+    return result.exit_code
+
+
+def _hook_policy_path(args, audit: Path) -> Path:
+    if args.policy:
+        path = Path(args.policy).expanduser().absolute()
+        if not path.is_file():
+            raise claude_code_install.InstallError(f"policy file {path} does not exist")
+        return path
+    path = claude_code_install.default_policy_path()
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        starter = claude_code_install.starter_policy(path, audit)
+        path.write_text(json.dumps(starter, indent=2) + "\n", encoding="utf-8")
+        print(f"wrote starter policy: {path}")
+    return path
+
+
+def _visible_settings(home: Path, cwd: Path) -> list[Path]:
+    return [claude_code_install.settings_path_for(scope, home, cwd) for scope in claude_code_install.SCOPES]
+
+
+def _install_claude_code(args) -> int:
+    home, cwd = Path.home(), Path.cwd()
+    settings_path = claude_code_install.settings_path_for(args.scope, home, cwd)
+    visible = _visible_settings(home, cwd)
+    version = claude_code_install.detect_claude_version()
+    try:
+        if args.uninstall and args.check:
+            raise claude_code_install.InstallError("--uninstall and --check are mutually exclusive")
+        if args.uninstall:
+            report = claude_code_install.uninstall(settings_path)
+        elif args.check:
+            report = claude_code_install.check(settings_path, sys.executable, version, visible)
+        else:
+            if args.mode is None:
+                raise claude_code_install.InstallError("--mode enforce|observe is required")
+            audit = Path(args.audit).expanduser().absolute() if args.audit else claude_code_install.default_audit_path()
+            report = claude_code_install.install(
+                settings_path,
+                sys.executable,
+                _hook_policy_path(args, audit),
+                audit,
+                args.mode,
+                args.scope,
+                version,
+                visible,
+            )
+    except claude_code_install.InstallError as err:
+        print(f"install failed: {err}", file=sys.stderr)
+        return 1
+    print(report.render())
+    return 0 if report.ok else 1
+
+
+def _report(args) -> int:
+    path = Path(args.audit).expanduser().absolute() if args.audit else claude_code_install.default_audit_path()
+    records, unreadable = audit_report.read_audit(path)
+    summary = audit_report.summarize(path, records, unreadable)
+    home, cwd = Path.home(), Path.cwd()
+    warnings = claude_code_install.disabled_hooks_warnings(_visible_settings(home, cwd))
+    print(audit_report.render_report(summary, datetime.now(timezone.utc), warnings))
+    return 0 if audit_report.is_firing(summary) else 1
+
+
 # Starter policy for `guard init`. Dict form is the source of truth; YAML/JSON
 # serializers derive from it so an installed wheel works without package data.
 _STARTER_POLICY: dict = {
@@ -840,6 +917,51 @@ def build_parser() -> argparse.ArgumentParser:
         help="overwrite an existing file",
     )
     init.set_defaults(func=_init)
+
+    hook = sub.add_parser("hook", help="harness hook adapters (stdin event in, harness exit code out)")
+    hook_sub = hook.add_subparsers(dest="harness", required=True)
+    claude_code = hook_sub.add_parser(
+        "claude-code",
+        help="Claude Code PreToolUse hook: deny exits 2, require_human asks, allow defers",
+        description=(
+            "Reads one PreToolUse event from stdin. Faults exit 2 in enforce mode. "
+            "Wire it through `guard install claude-code`; wiring it by hand loses the shell wrapper "
+            "that turns a crash before this process runs into a block."
+        ),
+    )
+    claude_code.add_argument("--policy", required=True, help="policy file (yaml/json); never falls back to defaults")
+    claude_code.add_argument("--audit", required=True, help="append audit records to this JSONL file")
+    claude_code.add_argument("--mode", required=True, choices=MODES, help="enforce blocks; observe only audits")
+    claude_code.set_defaults(func=_hook_claude_code)
+
+    install = sub.add_parser("install", help="wire agent-guard into an agent harness")
+    install_sub = install.add_subparsers(dest="harness", required=True)
+    install_cc = install_sub.add_parser(
+        "claude-code",
+        help="add, verify or remove the Claude Code PreToolUse hook for the Bash tool",
+        description=(
+            "Merges one hook entry into Claude Code settings atomically, runs the exact installed command "
+            "through a self-test, and rolls back if it fails. The hook is a guardrail tier, not a security boundary."
+        ),
+    )
+    install_cc.add_argument("--mode", choices=MODES, help="enforce blocks; observe only audits (required to install)")
+    install_cc.add_argument("--scope", choices=claude_code_install.SCOPES, default="user")
+    install_cc.add_argument("--policy", help="policy file (default: a starter policy written to the XDG config dir)")
+    install_cc.add_argument("--audit", help="audit JSONL file (default: XDG state dir)")
+    install_cc.add_argument("--uninstall", action="store_true", help="remove only the agent-guard hook entry")
+    install_cc.add_argument("--check", action="store_true", help="verify an installed hook, including a self-test")
+    install_cc.set_defaults(func=_install_claude_code)
+
+    report = sub.add_parser(
+        "report",
+        help="summarise an audit log and say whether the hook is firing",
+        description=(
+            "Reads the local audit JSONL (no network, no telemetry). Separates a hook that is not firing "
+            "from one that is firing and clean. Exits 1 when the hook is not firing."
+        ),
+    )
+    report.add_argument("--audit", help="audit JSONL file (default: the Claude Code hook's XDG state path)")
+    report.set_defaults(func=_report)
 
     return parser
 
