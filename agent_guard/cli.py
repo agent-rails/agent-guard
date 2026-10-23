@@ -676,6 +676,8 @@ def _report(args) -> int:
     home, cwd = Path.home(), Path.cwd()
     warnings = claude_code_install.disabled_hooks_warnings(_visible_settings(home, cwd))
     print(audit_report.render_report(summary, datetime.now(timezone.utc), warnings))
+    if args.flagged:
+        print(audit_report.render_flagged(*audit_report.flagged_rows(records)))
     return 0 if audit_report.is_firing(summary) else 1
 
 
@@ -961,6 +963,11 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     report.add_argument("--audit", help="audit JSONL file (default: the Claude Code hook's XDG state path)")
+    report.add_argument(
+        "--flagged",
+        action="store_true",
+        help="also list every denied or gated call, any outcome, grouped by rule (self-test excluded)",
+    )
     report.set_defaults(func=_report)
 
     return parser
