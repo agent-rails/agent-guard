@@ -115,7 +115,7 @@ Rows that are not objects or lack a timezone-aware ISO `ts` are counted as unrea
 
 ### guard report --flagged
 
-`--flagged` appends a list of every call the policy denied or sent to a human: decision `deny` or `require_human`, with any outcome (`observed`, `blocked` or `ask`). Calls are grouped by rule id, largest group first, and a call without a rule id is listed under `policy default`. Each line shows the timestamp, agent id, decision, outcome, `cmd_len` and the first 160 characters of the stored command, with control characters escaped. Self-test and fault rows are excluded. With no such calls it prints `flagged calls: none`. Without the flag the report output is unchanged.
+`--flagged` appends a list of the calls the policy denied or sent to a human: decision `deny` or `require_human`, with any outcome (`observed`, `blocked` or `ask`). Calls are grouped by rule id, largest group first, and a call without a rule id is listed under `policy default`. Each line shows the timestamp, agent id, decision, outcome, `cmd_len` and the first 160 code points of the stored command, with control characters escaped after the cut. Self-test and fault rows are excluded. A matching row that lacks a string `agent_id`, a string `outcome`, a string `args.cmd`, an integer `args.cmd_len`, or has a `rule_id` that is neither absent nor a non-empty string is not listed; it is counted on a `flagged rows skipped (missing or malformed fields): N` line. With no listed calls it prints `flagged calls: none`. Without the flag the report output is unchanged.
 
 ```text
 flagged calls: 2

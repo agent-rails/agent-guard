@@ -677,7 +677,7 @@ def _report(args) -> int:
     warnings = claude_code_install.disabled_hooks_warnings(_visible_settings(home, cwd))
     print(audit_report.render_report(summary, datetime.now(timezone.utc), warnings))
     if args.flagged:
-        print(audit_report.render_flagged(audit_report.flagged_rows(records)))
+        print(audit_report.render_flagged(*audit_report.flagged_rows(records)))
     return 0 if audit_report.is_firing(summary) else 1
 
 

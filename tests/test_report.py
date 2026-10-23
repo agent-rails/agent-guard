@@ -210,7 +210,26 @@ class FrozenDatetime(datetime):
 
 def flagged_lines(audit: Path) -> list[str]:
     records, _unreadable = report.read_audit(audit)
-    return report.render_flagged(report.flagged_rows(records)).splitlines()
+    return report.render_flagged(*report.flagged_rows(records)).splitlines()
+
+
+def flagged_row(ts: str, rule_id: str | None = "r", decision: str = "deny", cmd: str = "c", **overrides) -> dict:
+    row = {
+        "ts": ts,
+        "agent_id": "claude-code:s1",
+        "event": "decision",
+        "decision": decision,
+        "rule_id": rule_id,
+        "outcome": "observed",
+        "args": {"cmd": cmd, "cmd_len": len(cmd)},
+    }
+    row.update(overrides)
+    return row
+
+
+def write_rows(audit: Path, rows: list[dict]) -> None:
+    audit.parent.mkdir(parents=True, exist_ok=True)
+    audit.write_text("".join(json.dumps(row) + "\n" for row in rows))
 
 
 def row_line(record: dict) -> str:
@@ -338,3 +357,67 @@ def test_report_without_flagged_flag_is_unchanged(policy, audit, capsys, monkeyp
     assert capsys.readouterr().out == plain + "flagged calls: 1\nblock-rm-rf (1)\n" + (
         "  2026-10-23T09:00:00+00:00  claude-code:s1  deny  observed  cmd_len=13  rm -rf /tmp/x\n"
     )
+
+
+MALFORMED_OVERRIDES = [
+    pytest.param({"args": None}, id="args-null"),
+    pytest.param({"args": "x"}, id="args-string"),
+    pytest.param({"args": {"cmd_len": 1}}, id="cmd-missing"),
+    pytest.param({"args": {"cmd": "c"}}, id="cmd-len-missing"),
+    pytest.param({"args": {"cmd": 5, "cmd_len": 1}}, id="cmd-int"),
+    pytest.param({"args": {"cmd": None, "cmd_len": 1}}, id="cmd-null"),
+    pytest.param({"args": {"cmd": ["x"], "cmd_len": 1}}, id="cmd-list"),
+    pytest.param({"args": {"cmd": "c", "cmd_len": "1"}}, id="cmd-len-string"),
+    pytest.param({"agent_id": None}, id="agent-id-null"),
+    pytest.param({"outcome": 3}, id="outcome-int"),
+    pytest.param({"rule_id": 5}, id="rule-id-int"),
+    pytest.param({"rule_id": ""}, id="rule-id-empty"),
+]
+
+
+@pytest.mark.parametrize("overrides", MALFORMED_OVERRIDES)
+def test_flagged_skips_and_counts_rows_with_missing_or_malformed_fields(audit, capsys, overrides):
+    good = flagged_row("2026-10-23T09:00:00+00:00", rule_id="good", cmd="rm -rf /tmp/x")
+    bad = flagged_row("2026-10-23T09:01:00+00:00", **overrides)
+    if "agent_id" not in overrides:
+        bad["agent_id"] = "claude-code:s2"
+    write_rows(audit, [good, bad])
+    assert main(["report", "--audit", str(audit), "--flagged"]) == 0
+    assert capsys.readouterr().out.splitlines()[-4:] == [
+        "flagged calls: 1",
+        "good (1)",
+        row_line(good),
+        "flagged rows skipped (missing or malformed fields): 1",
+    ]
+
+
+def test_flagged_with_only_malformed_rows_prints_none_and_the_skip_count(audit):
+    write_rows(
+        audit,
+        [flagged_row("2026-10-23T09:00:00+00:00", args=None), flagged_row("2026-10-23T09:01:00+00:00", args=None)],
+    )
+    assert flagged_lines(audit) == [
+        "flagged calls: none",
+        "flagged rows skipped (missing or malformed fields): 2",
+    ]
+
+
+def test_flagged_orders_rows_by_instant_and_groups_by_size_then_name(audit):
+    later_offset = flagged_row("2026-10-23T10:00:00+00:00", rule_id="z-rule", cmd="later")
+    earlier_offset = flagged_row("2026-10-23T09:30:00+01:00", rule_id="z-rule", cmd="earlier")
+    small = flagged_row("2026-10-23T08:00:00+00:00", rule_id="a-rule", cmd="small")
+    tie_b = flagged_row("2026-10-23T08:10:00+00:00", rule_id="b-tie", cmd="tie-b")
+    tie_a = flagged_row("2026-10-23T08:20:00+00:00", rule_id="a-tie", cmd="tie-a")
+    write_rows(audit, [later_offset, tie_b, small, earlier_offset, tie_a])
+    assert flagged_lines(audit) == [
+        "flagged calls: 5",
+        "z-rule (2)",
+        row_line(earlier_offset),
+        row_line(later_offset),
+        "a-rule (1)",
+        row_line(small),
+        "a-tie (1)",
+        row_line(tie_a),
+        "b-tie (1)",
+        row_line(tie_b),
+    ]
