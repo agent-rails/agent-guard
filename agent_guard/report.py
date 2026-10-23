@@ -10,6 +10,8 @@ from .claude_code import SELFTEST_AGENT_ID
 
 TOP_RULES = 5
 TOP_SESSIONS = 10
+FLAGGED_DECISIONS = ("deny", "require_human")
+FLAGGED_EXCERPT_CHARS = 160
 
 
 @dataclass(frozen=True)
@@ -163,4 +165,40 @@ def render_report(summary: Summary, now: datetime, warnings: list[str]) -> str:
     if summary.unreadable_lines:
         lines.append(f"unreadable audit lines: {summary.unreadable_lines}")
     lines.append("observe data does not predict enforce behaviour: a denied agent may rephrase")
+    return "\n".join(lines)
+
+
+def flagged_rows(records: list[dict]) -> list[dict]:
+    rows = [
+        record
+        for record in records
+        if record.get("event") == "decision"
+        and record.get("agent_id") != SELFTEST_AGENT_ID
+        and record.get("decision") in FLAGGED_DECISIONS
+    ]
+    return sorted(rows, key=lambda record: datetime.fromisoformat(record["ts"]))
+
+
+def _flagged_line(record: dict) -> str:
+    fields = [
+        record["ts"],
+        record["agent_id"],
+        record["decision"],
+        record["outcome"],
+        f"cmd_len={record['args']['cmd_len']}",
+        record["args"]["cmd"][:FLAGGED_EXCERPT_CHARS],
+    ]
+    return "  " + "  ".join(_printable(field) for field in fields)
+
+
+def render_flagged(rows: list[dict]) -> str:
+    if not rows:
+        return "flagged calls: none"
+    groups: dict[str, list[dict]] = {}
+    for record in rows:
+        groups.setdefault(record.get("rule_id") or "policy default", []).append(record)
+    lines = [f"flagged calls: {len(rows)}"]
+    for rule, members in sorted(groups.items(), key=lambda item: (-len(item[1]), item[0])):
+        lines.append(f"{_printable(rule)} ({len(members)})")
+        lines += [_flagged_line(record) for record in members]
     return "\n".join(lines)

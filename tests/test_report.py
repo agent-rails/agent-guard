@@ -197,3 +197,144 @@ def test_cli_report_warns_when_hooks_are_disabled_in_the_project(policy, audit, 
 
 def test_report_always_states_that_observe_data_does_not_predict_enforce(audit):
     assert render(audit)[-1] == "observe data does not predict enforce behaviour: a denied agent may rephrase"
+
+
+FROZEN_NOW = datetime(2026, 10, 23, 12, 0, tzinfo=timezone.utc)
+
+
+class FrozenDatetime(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return FROZEN_NOW
+
+
+def flagged_lines(audit: Path) -> list[str]:
+    records, _unreadable = report.read_audit(audit)
+    return report.render_flagged(report.flagged_rows(records)).splitlines()
+
+
+def row_line(record: dict) -> str:
+    return (
+        f"  {record['ts']}  {record['agent_id']}  {record['decision']}  {record['outcome']}  "
+        f"cmd_len={record['args']['cmd_len']}  {record['args']['cmd']}"
+    )
+
+
+def audit_rows(audit: Path) -> list[dict]:
+    return report.read_audit(audit)[0]
+
+
+def test_flagged_lists_would_deny_and_would_ask_grouped_by_rule(policy, audit, tmp_path):
+    hook(policy, audit, "rm -rf /tmp/x", mode="observe")
+    hook(policy, audit, "echo hi", mode="observe", tool_use_id="toolu_2")
+    hook(policy, audit, "git push --force", mode="observe", session="sess-b", tool_use_id="toolu_3")
+    hook(policy, audit, "rm -rf /tmp/y", mode="observe", tool_use_id="toolu_4")
+    deny_all = tmp_path / "deny-all.json"
+    deny_all.write_text(json.dumps({"default": "deny", "rules": []}))
+    hook(deny_all, audit, "ls", mode="observe", tool_use_id="toolu_5")
+    rm_x, _echo, push, rm_y, ls = audit_rows(audit)
+    assert flagged_lines(audit) == [
+        "flagged calls: 4",
+        "block-rm-rf (2)",
+        row_line(rm_x),
+        row_line(rm_y),
+        "gate-force-push (1)",
+        row_line(push),
+        "policy default (1)",
+        row_line(ls),
+    ]
+
+
+def test_flagged_excludes_selftest_allow_and_fault_rows(policy, audit, tmp_path):
+    hook(policy, audit, "rm -rf /tmp/canary", session=SELFTEST_SESSION, tool_use_id="selftest-canary")
+    hook(policy, audit, "echo hi", tool_use_id="toolu_2")
+    hook(tmp_path / "missing-policy.json", audit, "rm -rf /tmp/x", tool_use_id="toolu_3")
+    hook(policy, audit, None, tool_use_id="toolu_4")
+    rows = audit_rows(audit)
+    assert [row.get("event") for row in rows] == ["decision", "decision", "fault", "fault"]
+    assert [row.get("decision") for row in rows[2:]] == ["deny", "deny"]
+    assert flagged_lines(audit) == ["flagged calls: none"]
+
+
+def test_flagged_includes_enforced_blocked_and_ask_outcomes(policy, audit):
+    hook(policy, audit, "rm -rf /tmp/x")
+    hook(policy, audit, "git push --force", tool_use_id="toolu_2")
+    hook(policy, audit, "rm -rf /tmp/y", mode="observe", tool_use_id="toolu_3")
+    blocked, asked, observed = audit_rows(audit)
+    assert [blocked["outcome"], asked["outcome"], observed["outcome"]] == ["blocked", "ask", "observed"]
+    assert flagged_lines(audit) == [
+        "flagged calls: 3",
+        "block-rm-rf (2)",
+        row_line(blocked),
+        row_line(observed),
+        "gate-force-push (1)",
+        row_line(asked),
+    ]
+
+
+def test_flagged_escapes_control_characters_and_truncates_to_160_chars(policy, audit):
+    prefix = "rm -rf /tmp/\x1b[31mred\x07/"
+    command = prefix + "a" * 300
+    hook(policy, audit, command, mode="observe")
+    lines = flagged_lines(audit)
+    text = "\n".join(lines)
+    assert "\x1b" not in text
+    assert "\x07" not in text
+    excerpt = "rm -rf /tmp/\\x1b[31mred\\x07/" + "a" * (160 - len(prefix))
+    assert lines[2].endswith(f"cmd_len={len(command)}  {excerpt}")
+    assert not lines[2].endswith("a" * (161 - len(prefix)))
+
+
+def test_flagged_with_no_rows_prints_none(policy, audit, capsys):
+    assert flagged_lines(audit) == ["flagged calls: none"]
+    hook(policy, audit, "echo hi")
+    assert flagged_lines(audit) == ["flagged calls: none"]
+    assert main(["report", "--audit", str(audit), "--flagged"]) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == "flagged calls: none"
+
+
+def test_report_without_flagged_flag_is_unchanged(policy, audit, capsys, monkeypatch):
+    monkeypatch.setattr("agent_guard.cli.datetime", FrozenDatetime)
+    audit.parent.mkdir(parents=True)
+    rows = [
+        {
+            "ts": "2026-10-23T09:00:00+00:00",
+            "agent_id": "claude-code:s1",
+            "event": "decision",
+            "decision": "deny",
+            "rule_id": "block-rm-rf",
+            "outcome": "observed",
+            "args": {"cmd": "rm -rf /tmp/x", "cmd_len": 13},
+        },
+        {
+            "ts": "2026-10-23T10:00:00+00:00",
+            "agent_id": "claude-code:s1",
+            "event": "decision",
+            "decision": "allow",
+            "rule_id": None,
+            "outcome": "observed",
+            "args": {"cmd": "echo hi", "cmd_len": 7},
+        },
+    ]
+    audit.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    expected = [
+        f"audit: {audit}",
+        "FIRING: 2 calls checked, 1 denied, gated or faulted",
+        "first event: 2026-10-23T09:00:00+00:00",
+        "last event: 2026-10-23T10:00:00+00:00 (2h ago)",
+        "checked: 2  allowed: 1  denied: 1  asked: 0",
+        "enforced: blocked 0, asked 0, deferred 0",
+        "observed (would have): blocked 1, asked 0",
+        "top rules: block-rm-rf (1)",
+        "sessions: 1",
+        "  claude-code:s1: 2",
+        "faults: 0",
+        "observe data does not predict enforce behaviour: a denied agent may rephrase",
+    ]
+    assert main(["report", "--audit", str(audit)]) == 0
+    plain = capsys.readouterr().out
+    assert plain == "\n".join(expected) + "\n"
+    assert main(["report", "--audit", str(audit), "--flagged"]) == 0
+    assert capsys.readouterr().out == plain + "flagged calls: 1\nblock-rm-rf (1)\n" + (
+        "  2026-10-23T09:00:00+00:00  claude-code:s1  deny  observed  cmd_len=13  rm -rf /tmp/x\n"
+    )
