@@ -99,7 +99,7 @@ A deny tells the agent to stop and ask the user. A model can still try an equiva
 ## guard report
 
 ```bash
-guard report [--audit PATH]
+guard report [--audit PATH] [--flagged]
 ```
 
 Reads the local audit log. Nothing leaves the machine. The first status line separates four states:
@@ -112,6 +112,25 @@ Reads the local audit log. Nothing leaves the machine. The first status line sep
 | `FIRING` | Calls checked, with denies, asks or faults |
 
 Rows that are not objects or lack a timezone-aware ISO `ts` are counted as unreadable. Agent ids, rule ids, paths and warnings are printed with control characters escaped. It also prints first and last event times, counts of enforced and observed outcomes, top rules, events per session, the fault count, and a warning if `disableAllHooks` is set in a settings file that applies to the current directory. Self-test events are excluded.
+
+### guard report --flagged
+
+`--flagged` appends a list of every call the policy denied or sent to a human: decision `deny` or `require_human`, with any outcome (`observed`, `blocked` or `ask`). Calls are grouped by rule id, largest group first, and a call without a rule id is listed under `policy default`. Each line shows the timestamp, agent id, decision, outcome, `cmd_len` and the first 160 characters of the stored command, with control characters escaped. Self-test and fault rows are excluded. With no such calls it prints `flagged calls: none`. Without the flag the report output is unchanged.
+
+```text
+flagged calls: 2
+block-rm-rf (1)
+  2026-10-23T09:00:00+00:00  claude-code:<session>  deny  observed  cmd_len=13  rm -rf /tmp/x
+gate-force-push (1)
+  2026-10-23T09:05:00+00:00  claude-code:<session>  require_human  observed  cmd_len=16  git push --force
+```
+
+Use it to review observe-mode data before switching to enforce. Its limits:
+
+- It reads the audit log only. It does not look at the host, the shell or Claude Code's transcript.
+- `observed` is not `executed`. An observed call was not blocked by the hook, but Claude Code's own permission prompt may still have rejected it, and the list cannot tell whether it ran or what it touched.
+- It lists the calls the policy would deny or ask about, as recorded when each call was checked. It does not re-evaluate them against a policy edited since. It does not judge whether the policy is right: a listed call may be a false positive to fix in the policy, and a dangerous call the policy does not match never appears.
+- The excerpt comes from the stored command, which is masked and truncated as described under Audit.
 
 ## Audit
 
