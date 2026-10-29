@@ -9,6 +9,7 @@ from .claude_code import SELFTEST_AGENT_ID, _digest
 from .decision import Decision
 from .policy import Policy, load_policy
 from .report import FLAGGED_EXCERPT_CHARS, _printable, read_audit
+from .tiers import rank
 
 DECISION_VALUES = frozenset(decision.value for decision in Decision)
 
@@ -51,6 +52,9 @@ class MustBlock:
 def load_replay_policy(path: Path) -> Policy:
     try:
         policy = load_policy(path)
+        for rule in policy.rules:
+            if rule.min_trust_tier:
+                rank(rule.min_trust_tier)
     except Exception as err:
         raise ReplayError(f"policy {path} failed to load: {type(err).__name__}: {err}") from err
     if any(rule.judge for rule in policy.rules):

@@ -525,3 +525,12 @@ def test_an_audit_line_nested_too_deeply_to_parse_exits_one_without_a_traceback(
     code, out, err = replay(capsys, "--policy", str(merged), "--audit", str(audit))
     assert (code, out) == (1, [])
     assert err.startswith(f"replay failed: audit file {audit} is unreadable: RecursionError: ")
+
+
+def test_a_policy_with_an_unknown_trust_tier_exits_one_before_any_row_is_replayed(merged, tmp_path, audit, capsys):
+    hook(merged, audit, "rm -rf /tmp/x")
+    tier = {"default": "allow", "rules": [{"id": "t", "decision": "allow", "tools": ["shell"], "min_trust_tier": "x"}]}
+    bad = write_policy(tmp_path / "tier.json", tier)
+    code, out, err = replay(capsys, "--policy", str(bad), "--audit", str(audit))
+    assert (code, out) == (1, [])
+    assert err.startswith(f"replay failed: policy {bad} failed to load: ValueError: unknown trust tier 'x'")

@@ -163,7 +163,7 @@ Changes are grouped by transition, largest group first, then by name; rows withi
 |---|---|
 | 0 | Ran; no must-block command is allowed. Changed rows alone do not fail it |
 | 3 | At least one must-block command is allowed by the candidate |
-| 1 | No report: the audit file is missing or unreadable or has a line nested too deeply to parse, no row is replayable, a policy fails to load or has a `judge` rule, or the must-block file is unreadable, not a JSON array, empty, or holds an entry that is not a non-empty string |
+| 1 | No report: the audit file is missing or unreadable or has a line nested too deeply to parse, no row is replayable, a policy fails to load, names an unknown `min_trust_tier` or has a `judge` rule, or the must-block file is unreadable, not a JSON array, empty, or holds an entry that is not a non-empty string |
 | 2 | Argument error |
 
 Its limits:
