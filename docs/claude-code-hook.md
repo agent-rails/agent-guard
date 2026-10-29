@@ -132,6 +132,49 @@ Use it to review observe-mode data before switching to enforce. Its limits:
 - It lists the calls the policy would deny or ask about, as recorded when each call was checked. It does not re-evaluate them against a policy edited since. It does not judge whether the policy is right: a listed call may be a false positive to fix in the policy, and a dangerous call the policy does not match never appears.
 - The excerpt comes from the stored command, which is masked and truncated as described under Audit.
 
+## guard replay
+
+```bash
+guard replay --policy CANDIDATE [--audit PATH] [--against-policy CURRENT] [--must-block FILE]
+```
+
+Shows which logged decisions a policy edit would change, before the edit goes live. It reads the audit log (default: the hook's XDG state path, as for `guard report`), the policy files and the must-block file. It does not write the policy, audit log or any state file, makes no network call, runs no judge, executes no command, and never applies the candidate. A symlink at the audit path is followed for reading.
+
+Each decision row's stored `args.cmd` is evaluated with `Policy.evaluate("shell", {"cmd": ...})` against the candidate and against the baseline. The baseline is `--against-policy` when given; otherwise it is the decision logged in each row, which mixes every policy that was live while the log was written. Use `--against-policy` to isolate one change. A row is listed when the two decisions differ. A row whose stored text does not hash to `cmd_sha256` (masked, or cut at 2048 bytes) is not diffed: it is counted on the `not diffed` line and left out of `replayed` and `changed`.
+
+```text
+audit: /home/me/.local/state/agent-guard/claude-code.jsonl
+candidate: new-policy.json
+baseline: current-policy.json
+replayed: 111  self-test excluded: 3  faults excluded: 0  unreadable: 0  skipped: 0
+not diffed (stored text differs from the original command): 9
+changed: 1
+deny -> allow (1)
+  2026-10-28T17:00:00+00:00  claude-code:<session>  block-rm-rf -> policy default  docker run --rm img pwsh -NoProfile
+must-block: must-block.json (9)
+result: OK (incomplete: 9 stored texts differ from the original command)
+```
+
+Changes are grouped by transition, largest group first, then by name; rows within a group are ordered by timestamp. Every changed row is listed with the rule before and after (`policy default` when none matched) and the first 160 code points of the stored command. Printed fields have control characters escaped. Self-test, fault and unreadable rows are excluded and counted. A decision row without a string `args.cmd`, a string `args.cmd_sha256`, or, when the logged decision is the baseline, a valid logged `decision` is counted as skipped, as is a row whose `event` is not `decision`.
+
+`--must-block FILE` is a JSON array of non-empty command strings. Each entry is evaluated as one command, so an entry may span lines. Every entry the candidate allows is printed as `BREACH`; `require_human` and `deny` are not breaches.
+
+The `result` line covers the must-block check only: `BREACH (N)` when the candidate allows N must-block commands, otherwise `OK`, including when no `--must-block` file is given. It does not judge the changed rows. Either result is followed by `(incomplete: ...)` naming the nonzero counts of rows whose stored text differs from the original command, unreadable lines and skipped rows, none of which the replay could check as they ran.
+
+| Exit | Meaning |
+|---|---|
+| 0 | Ran; no must-block command is allowed. Changed rows alone do not fail it |
+| 3 | At least one must-block command is allowed by the candidate |
+| 1 | No report: the audit, policy or must-block path is not a regular file (checked before opening; symlinks are followed), the audit file is missing or unreadable or has a line nested too deeply to parse, no row is replayable (including when every row's stored text differs from the original), a policy fails to load, names an unknown `min_trust_tier`, has a rule that cannot be evaluated or has a `judge` rule, or the must-block file is unreadable, not a JSON array, empty, or holds an entry that is not a non-empty string |
+| 2 | Argument error |
+
+Its limits:
+
+- It evaluates the stored command text, not the command that ran, and diffs only rows whose stored text hashes to `cmd_sha256`. Masked rows and rows cut at 2048 bytes are not diffed, so a change to how the policy treats them, including a match past the first 2048 bytes, is not shown. The `not diffed` line counts them.
+- Observe data does not predict enforce behaviour: a denied agent may rephrase, so a clean replay does not show how the agent will act once blocks start.
+- It evaluates static policy only. A policy with a `judge` rule is refused rather than replayed without the judge.
+- A must-block file tests the commands it lists. Passing it does not show that a policy blocks other spellings of the same action.
+
 ## Audit
 
 Each call writes one record: `agent_id` `claude-code:<session_id>[:<subagent id>]`, `tool` `shell`, the decision, `rule_id`, `executed: false` (the hook releases nothing, Claude Code executes), `call_id` `cc:<tool_use_id>`, and `outcome` (`blocked`, `ask`, `deferred` or `observed`). Faults write `event: "fault"`.

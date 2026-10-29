@@ -23,6 +23,7 @@ from agent_guard import (
     load_policy,
     with_bundled,
 )
+from agent_guard import replay as audit_replay
 from agent_guard import report as audit_report
 from agent_guard.claude_code import MODES, HookOptions, run_hook
 from agent_guard.guard import ApprovalGrant, ApprovalRequest, deny_by_default
@@ -681,6 +682,27 @@ def _report(args) -> int:
     return 0 if audit_report.is_firing(summary) else 1
 
 
+def _replay(args) -> int:
+    audit = Path(args.audit).expanduser().absolute() if args.audit else claude_code_install.default_audit_path()
+    candidate = Path(args.policy)
+    baseline = Path(args.against_policy) if args.against_policy else None
+    must_block_path = Path(args.must_block) if args.must_block else None
+    try:
+        candidate_policy = audit_replay.load_replay_policy(candidate)
+        baseline_policy = audit_replay.load_replay_policy(baseline) if baseline else None
+        commands = audit_replay.load_must_block(must_block_path) if must_block_path else None
+        records, unreadable = audit_replay.read_replay_audit(audit)
+        result = audit_replay.replay_rows(records, unreadable, candidate_policy, baseline_policy)
+    except audit_replay.ReplayError as err:
+        print(f"replay failed: {err}", file=sys.stderr)
+        return 1
+    must_block = None
+    if must_block_path and commands:
+        must_block = audit_replay.check_must_block(must_block_path, candidate_policy, commands)
+    print(audit_replay.render_replay(audit, candidate, baseline, result, must_block))
+    return 3 if must_block and must_block.breaches else 0
+
+
 # Starter policy for `guard init`. Dict form is the source of truth; YAML/JSON
 # serializers derive from it so an installed wheel works without package data.
 _STARTER_POLICY: dict = {
@@ -969,6 +991,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="also list every denied or gated call, any outcome, grouped by rule (self-test excluded)",
     )
     report.set_defaults(func=_report)
+
+    replay = sub.add_parser(
+        "replay",
+        help="list logged decisions a candidate policy would change (no execution, no policy or audit writes)",
+        description=(
+            "Re-evaluates the stored command of every decision row in the local audit JSONL against a candidate "
+            "policy and compares it with the logged decision or with --against-policy. Does not write the policy, "
+            "audit log or any state file; exits 3 when a --must-block command is allowed and 1 on any input error."
+        ),
+    )
+    replay.add_argument("--policy", required=True, help="candidate policy file (yaml/json)")
+    replay.add_argument("--audit", help="audit JSONL file (default: the Claude Code hook's XDG state path)")
+    replay.add_argument("--against-policy", help="baseline policy file (default: the decision logged in each row)")
+    replay.add_argument(
+        "--must-block",
+        help="JSON array of commands the candidate must not allow; exit 3 if it allows any",
+    )
+    replay.set_defaults(func=_replay)
 
     return parser
 
