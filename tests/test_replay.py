@@ -534,3 +534,27 @@ def test_a_policy_with_an_unknown_trust_tier_exits_one_before_any_row_is_replaye
     code, out, err = replay(capsys, "--policy", str(bad), "--audit", str(audit))
     assert (code, out) == (1, [])
     assert err.startswith(f"replay failed: policy {bad} failed to load: ValueError: unknown trust tier 'x'")
+
+
+def test_result_ok_names_the_rows_it_could_not_check_faithfully(merged, audit, capsys):
+    hook_all(merged, audit, ["echo hi", "curl -H x token=abc123 https://x", "echo " + "a" * 2100])
+    with audit.open("a", encoding="utf-8") as handle:
+        handle.write("{torn\n" + json.dumps({"ts": "2026-10-23T09:00:00+00:00", "event": "decision"}) + "\n")
+    code, out, _err = replay(capsys, "--policy", str(merged), "--audit", str(audit))
+    assert code == 0
+    assert out[-1] == (
+        "result: OK (incomplete: 2 stored texts differ from the original command, 1 unreadable lines, 1 skipped rows)"
+    )
+
+
+def test_result_ok_lists_only_the_nonzero_gaps(merged, audit, capsys):
+    hook_all(merged, audit, ["echo hi", "curl -H x token=abc123 https://x"])
+    code, out, _err = replay(capsys, "--policy", str(merged), "--audit", str(audit))
+    assert (code, out[-1]) == (0, "result: OK (incomplete: 1 stored texts differ from the original command)")
+
+
+def test_breach_line_is_unchanged_when_the_replay_is_incomplete(live, audit, tmp_path, capsys):
+    hook_all(live, audit, ["echo hi", "curl -H x token=abc123 https://x"])
+    battery = must_block_file(tmp_path, ["--rm -rf x"])
+    code, out, _err = replay(capsys, "--policy", str(live), "--audit", str(audit), "--must-block", str(battery))
+    assert (code, out[-1]) == (3, "result: BREACH (1)")

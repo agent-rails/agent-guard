@@ -152,12 +152,14 @@ changed: 1
 deny -> allow (1)
   2026-10-28T17:00:00+00:00  claude-code:<session>  block-rm-rf -> policy default  docker run --rm img pwsh -NoProfile
 must-block: must-block.json (9)
-result: OK
+result: OK (incomplete: 9 stored texts differ from the original command)
 ```
 
 Changes are grouped by transition, largest group first, then by name; rows within a group are ordered by timestamp. Every changed row is listed with the rule before and after (`policy default` when none matched) and the first 160 code points of the stored command. Printed fields have control characters escaped. Self-test, fault and unreadable rows are excluded and counted. A decision row without a string `args.cmd`, a string `args.cmd_sha256`, or, when the logged decision is the baseline, a valid logged `decision` is counted as skipped, as is a row whose `event` is not `decision`.
 
 `--must-block FILE` is a JSON array of non-empty command strings. Each entry is evaluated as one command, so an entry may span lines. Every entry the candidate allows is printed as `BREACH`; `require_human` and `deny` are not breaches.
+
+The `result` line covers the must-block check only: `BREACH (N)` when the candidate allows N must-block commands, otherwise `OK`, including when no `--must-block` file is given. It does not judge the changed rows. `OK` is followed by `(incomplete: ...)` naming the nonzero counts of rows whose stored text differs from the original command, unreadable lines and skipped rows, none of which the replay could check as they ran.
 
 | Exit | Meaning |
 |---|---|
