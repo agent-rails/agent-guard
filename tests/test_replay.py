@@ -668,3 +668,49 @@ def test_a_fifo_policy_path_exits_one_without_opening_it(merged, fifo, audit, ca
         [],
         f"replay failed: policy file {fifo} is not a regular file\n",
     )
+
+
+def edited_policy(source: Path, target: Path, rule_id: str, **changes) -> Path:
+    data = json.loads(source.read_text())
+    for rule in data["rules"]:
+        if rule["id"] == rule_id:
+            rule.update(changes)
+    return write_policy(target, data)
+
+
+def test_a_same_id_rule_whose_decision_changes_is_listed(merged, tmp_path, audit, capsys):
+    hook_all(merged, audit, ["echo hi", "rm -rf /tmp/x"])
+    softer = edited_policy(merged, tmp_path / "softer.json", "block-rm-rf", decision="require_human")
+    code, out, _err = replay(capsys, "--policy", str(softer), "--audit", str(audit), "--against-policy", str(merged))
+    assert code == 0
+    assert out[5:7] == ["changed: 1", "deny -> require_human (1)"]
+    assert out[7].endswith("  claude-code:sess-a  block-rm-rf -> block-rm-rf  rm -rf /tmp/x")
+
+
+def test_a_rule_id_change_with_the_same_decision_is_not_listed(merged, tmp_path, audit, capsys):
+    hook_all(merged, audit, ["echo hi", "rm -rf /tmp/x"])
+    renamed = edited_policy(merged, tmp_path / "renamed.json", "block-rm-rf", id="block-rm-rf-v2")
+    code, out, _err = replay(capsys, "--policy", str(renamed), "--audit", str(audit), "--against-policy", str(merged))
+    assert (code, out[5], out[6]) == (0, "changed: 0", "result: OK")
+    code, out, _err = replay(capsys, "--policy", str(renamed), "--audit", str(audit))
+    assert (code, out[5]) == (0, "changed: 0")
+
+
+TIERED_POLICY = {
+    "default": "allow",
+    "rules": [
+        {"id": "deploy-needs-container", "decision": "allow", "tools": ["shell"], "arg_patterns": [r"\bdeploy\b"]},
+    ],
+}
+
+
+@pytest.mark.parametrize("tier", ["local.container", "remote.microvm"])
+def test_replay_decides_a_min_trust_tier_rule_as_the_hook_does(tmp_path, audit, capsys, tier):
+    data = json.loads(json.dumps(TIERED_POLICY))
+    data["rules"][0]["min_trust_tier"] = tier
+    policy = write_policy(tmp_path / "tiered.json", data)
+    hook_all(policy, audit, ["deploy app", "echo hi"])
+    logged = [json.loads(line)["decision"] for line in audit.read_text().splitlines()]
+    assert logged == ["deny", "allow"]
+    code, out, _err = replay(capsys, "--policy", str(policy), "--audit", str(audit))
+    assert (code, out[3], out[5]) == (0, counts_line(replayed=2), "changed: 0")
