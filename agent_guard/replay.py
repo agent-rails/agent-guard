@@ -63,7 +63,7 @@ def read_replay_audit(path: Path) -> tuple[list[dict], int]:
         raise ReplayError(f"no audit file at {path}")
     try:
         return read_audit(path)
-    except (OSError, UnicodeDecodeError) as err:
+    except (OSError, UnicodeDecodeError, RecursionError) as err:
         raise ReplayError(f"audit file {path} is unreadable: {type(err).__name__}: {err}") from err
 
 

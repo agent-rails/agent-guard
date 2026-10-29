@@ -516,3 +516,12 @@ def test_a_bad_must_block_file_fails_before_a_missing_audit_is_reported(merged, 
     code, _out, err = replay(capsys, "--policy", str(merged), "--audit", str(audit), "--must-block", str(battery))
     assert code == 1
     assert "must-block" in err
+
+
+def test_an_audit_line_nested_too_deeply_to_parse_exits_one_without_a_traceback(merged, audit, capsys):
+    write_rows(audit, [decision_row("2026-10-23T09:00:00+00:00", "echo ok")])
+    with audit.open("a", encoding="utf-8") as handle:
+        handle.write("[" * 200000 + "\n")
+    code, out, err = replay(capsys, "--policy", str(merged), "--audit", str(audit))
+    assert (code, out) == (1, [])
+    assert err.startswith(f"replay failed: audit file {audit} is unreadable: RecursionError: ")
