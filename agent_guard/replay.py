@@ -39,7 +39,7 @@ class ReplayResult:
     faults: int
     unreadable: int
     skipped: int
-    stored_differs: int
+    not_diffed: int
     changes: list[Change]
 
 
@@ -138,7 +138,7 @@ def _logged(record: dict) -> Outcome:
 
 
 def replay_rows(records: list[dict], unreadable: int, candidate: Policy, baseline: Policy | None) -> ReplayResult:
-    selftest = faults = skipped = stored_differs = replayed = 0
+    selftest = faults = skipped = not_diffed = replayed = 0
     changes: list[Change] = []
     for record in records:
         if record.get("agent_id") == SELFTEST_AGENT_ID:
@@ -151,15 +151,19 @@ def replay_rows(records: list[dict], unreadable: int, candidate: Policy, baselin
         if command is None:
             skipped += 1
             continue
+        if _digest(command) != record["args"]["cmd_sha256"]:
+            not_diffed += 1
+            continue
         replayed += 1
-        stored_differs += _digest(command) != record["args"]["cmd_sha256"]
         before = _logged(record) if baseline is None else _evaluate(baseline, command)
         after = _evaluate(candidate, command)
         if before.decision != after.decision:
             changes.append(Change(record, before, after))
+    if replayed == 0 and not_diffed:
+        raise ReplayError(f"no decision row has stored text matching the original command ({not_diffed} not diffed)")
     if replayed == 0:
         raise ReplayError("no decision rows to replay")
-    return ReplayResult(replayed, selftest, faults, unreadable, skipped, stored_differs, changes)
+    return ReplayResult(replayed, selftest, faults, unreadable, skipped, not_diffed, changes)
 
 
 def _rule(outcome: Outcome) -> str:
@@ -204,7 +208,7 @@ def render_replay(
         f"baseline: {_printable(baseline_label)}",
         f"replayed: {result.replayed}  self-test excluded: {result.selftest}  faults excluded: {result.faults}  "
         f"unreadable: {result.unreadable}  skipped: {result.skipped}",
-        f"stored text differs from the original command (redacted or truncated): {result.stored_differs}",
+        f"not diffed (stored text differs from the original command): {result.not_diffed}",
         f"changed: {len(result.changes)}",
     ]
     lines += _change_groups(result.changes)
@@ -217,7 +221,7 @@ def render_replay(
 
 def _ok_line(result: ReplayResult) -> str:
     gaps = [
-        (result.stored_differs, "stored texts differ from the original command"),
+        (result.not_diffed, "stored texts differ from the original command"),
         (result.unreadable, "unreadable lines"),
         (result.skipped, "skipped rows"),
     ]

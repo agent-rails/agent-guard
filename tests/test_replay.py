@@ -141,7 +141,7 @@ def test_docker_rm_flag_flips_deny_to_allow_moving_to_the_merged_prefix(old, mer
         f"candidate: {merged}",
         "baseline: logged decisions (mixes every policy live during the log)",
         counts_line(replayed=3),
-        "stored text differs from the original command (redacted or truncated): 0",
+        "not diffed (stored text differs from the original command): 0",
         "changed: 1",
         "deny -> allow (1)",
         f"  {row['ts']}  claude-code:sess-a  block-rm-rf -> policy default  {DOCKER_RM}",
@@ -213,19 +213,22 @@ def test_redacted_and_truncated_rows_are_counted_as_differing_from_the_original(
     assert len(rows[2]["args"]["cmd"].encode()) == 2048
     code, out, _err = replay(capsys, "--policy", str(merged), "--audit", str(audit))
     assert code == 0
-    assert out[4] == "stored text differs from the original command (redacted or truncated): 2"
+    assert out[3:6] == [
+        counts_line(replayed=1),
+        "not diffed (stored text differs from the original command): 2",
+        "changed: 0",
+    ]
 
 
-def test_a_match_past_the_stored_2048_bytes_is_invisible_to_replay(merged, audit, capsys):
-    hook(merged, audit, "echo " + "a" * 2100 + "; rm -rf /tmp/x")
-    assert json.loads(audit.read_text())["decision"] == "deny"
-    code, out, _err = replay(capsys, "--policy", str(merged), "--audit", str(audit), "--against-policy", str(merged))
-    assert (code, out[4:6]) == (
-        0,
-        ["stored text differs from the original command (redacted or truncated): 1", "changed: 0"],
-    )
-    code, out, _err = replay(capsys, "--policy", str(merged), "--audit", str(audit))
-    assert out[6] == "deny -> allow (1)"
+def test_a_row_cut_at_2048_bytes_is_not_diffed_so_a_match_past_the_cut_is_not_reported(merged, audit, capsys):
+    hook_all(merged, audit, ["echo hi", "echo " + "a" * 2100 + "; rm -rf /tmp/x"])
+    assert json.loads(audit.read_text().splitlines()[1])["decision"] == "deny"
+    for argv in ([], ["--against-policy", str(merged)]):
+        code, out, _err = replay(capsys, "--policy", str(merged), "--audit", str(audit), *argv)
+        assert (code, out[3:6]) == (
+            0,
+            [counts_line(replayed=1), "not diffed (stored text differs from the original command): 1", "changed: 0"],
+        )
 
 
 def test_control_and_unicode_characters_in_printed_fields_are_escaped(merged, audit, capsys):
@@ -714,3 +717,33 @@ def test_replay_decides_a_min_trust_tier_rule_as_the_hook_does(tmp_path, audit, 
     assert logged == ["deny", "allow"]
     code, out, _err = replay(capsys, "--policy", str(policy), "--audit", str(audit))
     assert (code, out[3], out[5]) == (0, counts_line(replayed=2), "changed: 0")
+
+
+TOKEN_POLICY = {
+    "default": "allow",
+    "rules": [{"id": "no-raw-token", "decision": "deny", "tools": ["shell"], "arg_patterns": ["token=[a-z0-9]"]}],
+}
+
+
+def test_a_hook_redacted_row_replayed_under_its_own_policy_is_not_diffed(tmp_path, audit, capsys):
+    policy = write_policy(tmp_path / "token.json", TOKEN_POLICY)
+    hook_all(policy, audit, ["echo hi", "curl -H token=abc123 x"])
+    redacted = json.loads(audit.read_text().splitlines()[1])
+    assert (redacted["decision"], redacted["args"]["cmd"]) == ("deny", "curl -H token=*** x")
+    code, out, _err = replay(capsys, "--policy", str(policy), "--audit", str(audit))
+    assert code == 0
+    assert out[3:6] == [
+        counts_line(replayed=1),
+        "not diffed (stored text differs from the original command): 1",
+        "changed: 0",
+    ]
+
+
+def test_an_audit_whose_every_row_differs_from_the_original_exits_one(tmp_path, audit, capsys):
+    policy = write_policy(tmp_path / "token.json", TOKEN_POLICY)
+    hook_all(policy, audit, ["curl -H token=abc123 x", "echo " + "a" * 2100])
+    assert replay(capsys, "--policy", str(policy), "--audit", str(audit)) == (
+        1,
+        [],
+        "replay failed: no decision row has stored text matching the original command (2 not diffed)\n",
+    )
