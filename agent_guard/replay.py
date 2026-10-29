@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -40,6 +41,13 @@ class ReplayResult:
     changes: list[Change]
 
 
+@dataclass(frozen=True)
+class MustBlock:
+    path: Path
+    checked: int
+    breaches: list[str]
+
+
 def load_replay_policy(path: Path) -> Policy:
     try:
         policy = load_policy(path)
@@ -76,6 +84,23 @@ def _is_utf8(text: str) -> bool:
     except UnicodeEncodeError:
         return False
     return True
+
+
+def load_must_block(path: Path) -> list[str]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError, RecursionError) as err:
+        raise ReplayError(f"must-block file {path} is unreadable: {type(err).__name__}: {err}") from err
+    if not isinstance(data, list) or not data:
+        raise ReplayError(f"must-block file {path} must be a non-empty JSON array of commands")
+    if not all(isinstance(item, str) and item.strip() and _is_utf8(item) for item in data):
+        raise ReplayError(f"must-block file {path} must hold only non-empty UTF-8 strings")
+    return data
+
+
+def check_must_block(path: Path, candidate: Policy, commands: list[str]) -> MustBlock:
+    breaches = [command for command in commands if _evaluate(candidate, command).decision == Decision.ALLOW.value]
+    return MustBlock(path, len(commands), breaches)
 
 
 def _evaluate(policy: Policy, command: str) -> Outcome:
@@ -139,7 +164,15 @@ def _change_groups(changes: list[Change]) -> list[str]:
     return lines
 
 
-def render_replay(audit: Path, candidate: Path, baseline: Path | None, result: ReplayResult) -> str:
+def _must_block_lines(must_block: MustBlock) -> list[str]:
+    lines = [f"must-block: {_printable(must_block.path)} ({must_block.checked})"]
+    lines += [f"  BREACH  allow  {_printable(command[:FLAGGED_EXCERPT_CHARS])}" for command in must_block.breaches]
+    return lines
+
+
+def render_replay(
+    audit: Path, candidate: Path, baseline: Path | None, result: ReplayResult, must_block: MustBlock | None
+) -> str:
     baseline_label = str(baseline) if baseline else "logged decisions (mixes every policy live during the log)"
     lines = [
         f"audit: {_printable(audit)}",
@@ -151,5 +184,8 @@ def render_replay(audit: Path, candidate: Path, baseline: Path | None, result: R
         f"changed: {len(result.changes)}",
     ]
     lines += _change_groups(result.changes)
-    lines.append("result: OK")
+    if must_block is not None:
+        lines += _must_block_lines(must_block)
+    breaches = len(must_block.breaches) if must_block else 0
+    lines.append(f"result: BREACH ({breaches})" if breaches else "result: OK")
     return "\n".join(lines)

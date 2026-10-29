@@ -686,16 +686,21 @@ def _replay(args) -> int:
     audit = Path(args.audit).expanduser().absolute() if args.audit else claude_code_install.default_audit_path()
     candidate = Path(args.policy)
     baseline = Path(args.against_policy) if args.against_policy else None
+    must_block_path = Path(args.must_block) if args.must_block else None
     try:
         candidate_policy = audit_replay.load_replay_policy(candidate)
         baseline_policy = audit_replay.load_replay_policy(baseline) if baseline else None
+        commands = audit_replay.load_must_block(must_block_path) if must_block_path else None
         records, unreadable = audit_replay.read_replay_audit(audit)
         result = audit_replay.replay_rows(records, unreadable, candidate_policy, baseline_policy)
     except audit_replay.ReplayError as err:
         print(f"replay failed: {err}", file=sys.stderr)
         return 1
-    print(audit_replay.render_replay(audit, candidate, baseline, result))
-    return 0
+    must_block = None
+    if must_block_path and commands:
+        must_block = audit_replay.check_must_block(must_block_path, candidate_policy, commands)
+    print(audit_replay.render_replay(audit, candidate, baseline, result, must_block))
+    return 3 if must_block and must_block.breaches else 0
 
 
 # Starter policy for `guard init`. Dict form is the source of truth; YAML/JSON
@@ -992,13 +997,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="list logged decisions a candidate policy would change (no execution, no writes)",
         description=(
             "Re-evaluates the stored command of every decision row in the local audit JSONL against a candidate "
-            "policy and compares it with the logged decision or with --against-policy. Reads only; exits 1 on "
-            "any input error."
+            "policy and compares it with the logged decision or with --against-policy. Reads only; exits 3 when "
+            "a --must-block command is allowed and 1 on any input error."
         ),
     )
     replay.add_argument("--policy", required=True, help="candidate policy file (yaml/json)")
     replay.add_argument("--audit", help="audit JSONL file (default: the Claude Code hook's XDG state path)")
     replay.add_argument("--against-policy", help="baseline policy file (default: the decision logged in each row)")
+    replay.add_argument(
+        "--must-block",
+        help="JSON array of commands the candidate must not allow; exit 3 if it allows any",
+    )
     replay.set_defaults(func=_replay)
 
     return parser

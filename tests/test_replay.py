@@ -410,3 +410,109 @@ def test_a_stored_command_with_a_lone_surrogate_is_skipped_not_fatal(merged, aud
     audit.write_text(good + "\n" + bad + "\n")
     code, out, _err = replay(capsys, "--policy", str(merged), "--audit", str(audit))
     assert (code, out[3]) == (0, counts_line(replayed=1, skipped=1))
+
+
+@pytest.fixture
+def live(tmp_path) -> Path:
+    return hook_policy(tmp_path, "live.json", LIVE_RM_PREFIX)
+
+
+@pytest.fixture
+def logged(merged, audit) -> Path:
+    hook_all(merged, audit, ["echo hi", "rm -rf /tmp/x"])
+    return audit
+
+
+def must_block_file(tmp_path: Path, content) -> Path:
+    path = tmp_path / "must-block.json"
+    path.write_text(content if isinstance(content, str) else json.dumps(content))
+    return path
+
+
+EVASIONS = ["${x:-rm} -rf x", "v=--rm eval '${v#--} -rf x'", "--rm -rf x"]
+
+
+def test_a_must_block_command_allowed_by_the_candidate_is_a_breach_exit_three(live, logged, tmp_path, capsys):
+    battery = must_block_file(tmp_path, ["rm -rf ~", *EVASIONS])
+    code, out, err = replay(capsys, "--policy", str(live), "--audit", str(logged), "--must-block", str(battery))
+    assert (code, err) == (3, "")
+    assert out[-5:] == [
+        f"must-block: {battery} (4)",
+        "  BREACH  allow  ${x:-rm} -rf x",
+        "  BREACH  allow  v=--rm eval '${v#--} -rf x'",
+        "  BREACH  allow  --rm -rf x",
+        "result: BREACH (3)",
+    ]
+
+
+def test_the_merged_prefix_blocks_the_battery_exit_zero(merged, logged, tmp_path, capsys):
+    battery = must_block_file(tmp_path, ["rm -rf ~", *EVASIONS])
+    code, out, _err = replay(capsys, "--policy", str(merged), "--audit", str(logged), "--must-block", str(battery))
+    assert code == 0
+    assert out[-2:] == [f"must-block: {battery} (4)", "result: OK"]
+
+
+def test_require_human_is_not_a_breach(merged, logged, tmp_path, capsys):
+    battery = must_block_file(tmp_path, ["git push --force origin main", "guard install claude-code --uninstall"])
+    code, out, _err = replay(capsys, "--policy", str(merged), "--audit", str(logged), "--must-block", str(battery))
+    assert (code, out[-1]) == (0, "result: OK")
+
+
+def test_a_multiline_entry_is_evaluated_as_one_command(merged, logged, tmp_path, capsys):
+    battery = must_block_file(tmp_path, ["echo one\nrm -rf /", "echo one\necho two\x1b[2J"])
+    code, out, _err = replay(capsys, "--policy", str(merged), "--audit", str(logged), "--must-block", str(battery))
+    assert code == 3
+    assert out[-3:] == [
+        f"must-block: {battery} (2)",
+        "  BREACH  allow  echo one\\necho two\\x1b[2J",
+        "result: BREACH (1)",
+    ]
+
+
+def test_must_block_is_checked_against_the_candidate_not_the_baseline(live, merged, logged, tmp_path, capsys):
+    battery = must_block_file(tmp_path, EVASIONS)
+    argv = ["--audit", str(logged), "--must-block", str(battery)]
+    assert replay(capsys, "--policy", str(merged), "--against-policy", str(live), *argv)[0] == 0
+    assert replay(capsys, "--policy", str(live), "--against-policy", str(merged), *argv)[0] == 3
+
+
+BAD_MUST_BLOCK = [
+    pytest.param({"cmd": "rm -rf /"}, id="object"),
+    pytest.param("rm -rf /", id="bare-string"),
+    pytest.param([], id="empty-list"),
+    pytest.param(["rm -rf /", 5], id="non-string-entry"),
+    pytest.param(["rm -rf /", ""], id="empty-entry"),
+    pytest.param(["rm -rf /", "  \n"], id="blank-entry"),
+    pytest.param('["rm -rf \\ud800"]', id="lone-surrogate"),
+]
+
+
+@pytest.mark.parametrize("content", BAD_MUST_BLOCK)
+def test_a_must_block_file_that_is_not_a_non_empty_list_of_commands_exits_one(
+    merged, logged, tmp_path, capsys, content
+):
+    battery = must_block_file(tmp_path, content)
+    code, out, err = replay(capsys, "--policy", str(merged), "--audit", str(logged), "--must-block", str(battery))
+    assert (code, out) == (1, [])
+    assert err.startswith(f"replay failed: must-block file {battery} ")
+
+
+@pytest.mark.parametrize(
+    "content", [None, "{not json", "[" * 100000, b"\xff\xfe"], ids=["missing", "not-json", "deep", "bytes"]
+)
+def test_an_unreadable_must_block_file_exits_one(merged, logged, tmp_path, capsys, content):
+    battery = tmp_path / "must-block.json"
+    if isinstance(content, bytes):
+        battery.write_bytes(content)
+    elif content is not None:
+        battery.write_text(content)
+    code, out, err = replay(capsys, "--policy", str(merged), "--audit", str(logged), "--must-block", str(battery))
+    assert (code, out) == (1, [])
+    assert err.startswith(f"replay failed: must-block file {battery} is unreadable: ")
+
+
+def test_a_bad_must_block_file_fails_before_a_missing_audit_is_reported(merged, audit, tmp_path, capsys):
+    battery = must_block_file(tmp_path, [])
+    code, _out, err = replay(capsys, "--policy", str(merged), "--audit", str(audit), "--must-block", str(battery))
+    assert code == 1
+    assert "must-block" in err
