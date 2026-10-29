@@ -76,7 +76,6 @@ def _probe(policy: Policy) -> None:
         if rule.min_trust_tier:
             rank(rule.min_trust_tier)
         rule.matches("shell", "")
-    policy.evaluate("shell", {"cmd": ""})
 
 
 def read_replay_audit(path: Path) -> tuple[list[dict], int]:
