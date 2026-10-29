@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import stat
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -50,11 +51,10 @@ class MustBlock:
 
 
 def load_replay_policy(path: Path) -> Policy:
+    _require_regular_file(path, "policy file")
     try:
         policy = load_policy(path)
-        for rule in policy.rules:
-            if rule.min_trust_tier:
-                rank(rule.min_trust_tier)
+        _probe(policy)
     except Exception as err:
         raise ReplayError(f"policy {path} failed to load: {type(err).__name__}: {err}") from err
     if any(rule.judge for rule in policy.rules):
@@ -62,9 +62,27 @@ def load_replay_policy(path: Path) -> Policy:
     return policy
 
 
+def _require_regular_file(path: Path, label: str) -> None:
+    try:
+        mode = path.stat().st_mode
+    except OSError as err:
+        raise ReplayError(f"{label} {path} is unreadable: {type(err).__name__}: {err}") from err
+    if not stat.S_ISREG(mode):
+        raise ReplayError(f"{label} {path} is not a regular file")
+
+
+def _probe(policy: Policy) -> None:
+    for rule in policy.rules:
+        if rule.min_trust_tier:
+            rank(rule.min_trust_tier)
+        rule.matches("shell", "")
+    policy.evaluate("shell", {"cmd": ""})
+
+
 def read_replay_audit(path: Path) -> tuple[list[dict], int]:
     if not path.exists():
         raise ReplayError(f"no audit file at {path}")
+    _require_regular_file(path, "audit file")
     try:
         return read_audit(path)
     except (OSError, UnicodeDecodeError, RecursionError) as err:
@@ -77,7 +95,8 @@ def _stored_command(record: dict, logged_baseline: bool) -> str | None:
         return None
     if not isinstance(args.get("cmd_sha256"), str) or not _is_utf8(args["cmd"]):
         return None
-    if logged_baseline and record.get("decision") not in DECISION_VALUES:
+    decision = record.get("decision")
+    if logged_baseline and not (isinstance(decision, str) and decision in DECISION_VALUES):
         return None
     return args["cmd"]
 
@@ -91,6 +110,7 @@ def _is_utf8(text: str) -> bool:
 
 
 def load_must_block(path: Path) -> list[str]:
+    _require_regular_file(path, "must-block file")
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, ValueError, RecursionError) as err:

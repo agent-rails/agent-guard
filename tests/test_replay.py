@@ -4,6 +4,8 @@ import hashlib
 import io
 import json
 import os
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -310,13 +312,9 @@ def test_symlinked_audit_path_is_read_through_and_its_target_is_not_modified(mer
     assert target.read_bytes() == before
 
 
-@pytest.mark.parametrize("content", [b"\xff\xfe not utf-8\n", None], ids=["not-utf8", "directory"])
-def test_unreadable_audit_path_exits_one(merged, audit, capsys, content):
-    if content is None:
-        audit.mkdir(parents=True)
-    else:
-        audit.parent.mkdir()
-        audit.write_bytes(content)
+def test_unreadable_audit_path_exits_one(merged, audit, capsys):
+    audit.parent.mkdir()
+    audit.write_bytes(b"\xff\xfe not utf-8\n")
     code, out, err = replay(capsys, "--policy", str(merged), "--audit", str(audit))
     assert (code, out) == (1, [])
     assert err.startswith(f"replay failed: audit file {audit} is unreadable: ")
@@ -366,7 +364,6 @@ BAD_POLICIES = [
         json.dumps({"default": "allow", "rules": [{"decision": "deny", "tools": ["s"], "arg_patterns": ["(?=x)"]}]}),
         id="not-re2",
     ),
-    pytest.param(None, id="missing-file"),
 ]
 
 
@@ -375,12 +372,21 @@ BAD_POLICIES = [
 def test_a_policy_that_fails_to_load_exits_one(merged, tmp_path, audit, capsys, text, flag):
     hook(merged, audit, "echo hi")
     bad = tmp_path / "bad.json"
-    if text is not None:
-        bad.write_text(text)
+    bad.write_text(text)
     argv = {"--policy": str(merged), "--against-policy": str(merged), "--audit": str(audit), flag: str(bad)}
     code, out, err = replay(capsys, *[part for pair in argv.items() for part in pair])
     assert (code, out) == (1, [])
     assert err.startswith(f"replay failed: policy {bad} failed to load: ")
+
+
+@pytest.mark.parametrize("flag", ["--policy", "--against-policy"])
+def test_a_missing_policy_file_exits_one(merged, tmp_path, audit, capsys, flag):
+    hook(merged, audit, "echo hi")
+    missing = tmp_path / "missing.json"
+    argv = {"--policy": str(merged), "--against-policy": str(merged), "--audit": str(audit), flag: str(missing)}
+    code, out, err = replay(capsys, *[part for pair in argv.items() for part in pair])
+    assert (code, out) == (1, [])
+    assert err.startswith(f"replay failed: policy file {missing} is unreadable: FileNotFoundError: ")
 
 
 def test_policy_is_required(capsys):
@@ -558,3 +564,107 @@ def test_breach_line_is_unchanged_when_the_replay_is_incomplete(live, audit, tmp
     battery = must_block_file(tmp_path, ["--rm -rf x"])
     code, out, _err = replay(capsys, "--policy", str(live), "--audit", str(audit), "--must-block", str(battery))
     assert (code, out[-1]) == (3, "result: BREACH (1)")
+
+
+@pytest.mark.parametrize("decision", [["deny"], {"deny": 1}], ids=["list", "dict"])
+def test_an_unhashable_logged_decision_is_skipped_not_fatal(merged, audit, capsys, decision):
+    write_rows(
+        audit,
+        [
+            decision_row("2026-10-23T09:00:00+00:00", "echo ok"),
+            decision_row("2026-10-23T09:01:00+00:00", "rm -rf /x", decision=decision),
+        ],
+    )
+    code, out, _err = replay(capsys, "--policy", str(merged), "--audit", str(audit))
+    assert (code, out[3]) == (0, counts_line(replayed=1, skipped=1))
+
+
+CRASHING_RULES = [
+    pytest.param("never-matches-xyz", [None], id="null-tool"),
+    pytest.param("^cmd=$", [5, "shell"], id="int-tool-behind-a-rule-matching-an-empty-command"),
+]
+
+
+@pytest.mark.parametrize(("first_pattern", "tools"), CRASHING_RULES)
+@pytest.mark.parametrize("flag", ["--policy", "--against-policy"])
+def test_a_policy_that_loads_but_cannot_be_evaluated_exits_one(
+    merged, tmp_path, audit, capsys, first_pattern, tools, flag
+):
+    hook(merged, audit, "echo hi")
+    rules = [
+        {"id": "first", "decision": "deny", "tools": ["shell"], "arg_patterns": [first_pattern]},
+        {"id": "bad", "decision": "deny", "tools": tools},
+    ]
+    bad = write_policy(tmp_path / "crash.json", {"default": "allow", "rules": rules})
+    argv = {"--policy": str(merged), "--against-policy": str(merged), "--audit": str(audit), flag: str(bad)}
+    code, out, err = replay(capsys, *[part for pair in argv.items() for part in pair])
+    assert (code, out) == (1, [])
+    assert err.startswith(f"replay failed: policy {bad} failed to load: TypeError: ")
+
+
+@pytest.fixture
+def fifo(tmp_path):
+    path = tmp_path / "fifo"
+    os.mkfifo(path)
+    stop = threading.Event()
+
+    def release_a_blocked_reader() -> None:
+        deadline = time.monotonic() + 10
+        while not stop.is_set() and time.monotonic() < deadline:
+            try:
+                descriptor = os.open(path, os.O_WRONLY | os.O_NONBLOCK)
+            except OSError:
+                time.sleep(0.02)
+                continue
+            os.close(descriptor)
+            return
+
+    thread = threading.Thread(target=release_a_blocked_reader, daemon=True)
+    thread.start()
+    yield path
+    stop.set()
+    thread.join()
+
+
+def test_a_fifo_audit_path_exits_one_without_opening_it(merged, fifo, capsys):
+    assert replay(capsys, "--policy", str(merged), "--audit", str(fifo)) == (
+        1,
+        [],
+        f"replay failed: audit file {fifo} is not a regular file\n",
+    )
+
+
+def test_a_directory_audit_path_exits_one(merged, audit, capsys):
+    audit.mkdir(parents=True)
+    assert replay(capsys, "--policy", str(merged), "--audit", str(audit)) == (
+        1,
+        [],
+        f"replay failed: audit file {audit} is not a regular file\n",
+    )
+
+
+def test_a_symlink_to_a_fifo_audit_path_exits_one(merged, fifo, audit, capsys):
+    audit.parent.mkdir()
+    audit.symlink_to(fifo)
+    assert replay(capsys, "--policy", str(merged), "--audit", str(audit))[2] == (
+        f"replay failed: audit file {audit} is not a regular file\n"
+    )
+
+
+def test_a_fifo_must_block_path_exits_one_without_opening_it(merged, logged, fifo, capsys):
+    assert replay(capsys, "--policy", str(merged), "--audit", str(logged), "--must-block", str(fifo)) == (
+        1,
+        [],
+        f"replay failed: must-block file {fifo} is not a regular file\n",
+    )
+
+
+@pytest.mark.parametrize("flag", ["--policy", "--against-policy"])
+def test_a_fifo_policy_path_exits_one_without_opening_it(merged, fifo, audit, capsys, flag):
+    hook(merged, audit, "echo hi")
+    argv = {"--policy": str(merged), "--against-policy": str(merged), "--audit": str(audit), flag: str(fifo)}
+    assert replay(capsys, *[part for pair in argv.items() for part in pair]) == (
+        1,
+        [],
+        f"replay failed: policy file {fifo} is not a regular file\n",
+    )
