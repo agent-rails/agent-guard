@@ -138,7 +138,7 @@ Use it to review observe-mode data before switching to enforce. Its limits:
 guard replay --policy CANDIDATE [--audit PATH] [--against-policy CURRENT] [--must-block FILE]
 ```
 
-Shows which logged decisions a policy edit would change, before the edit goes live. It reads the audit log (default: the hook's XDG state path, as for `guard report`), the policy files and the must-block file. It writes nothing, makes no network call, runs no judge, executes no command, and never applies the candidate. A symlink at the audit path is followed for reading.
+Shows which logged decisions a policy edit would change, before the edit goes live. It reads the audit log (default: the hook's XDG state path, as for `guard report`), the policy files and the must-block file. It does not write the policy, audit log or any state file, makes no network call, runs no judge, executes no command, and never applies the candidate. A symlink at the audit path is followed for reading.
 
 Each decision row's stored `args.cmd` is evaluated with `Policy.evaluate("shell", {"cmd": ...})` against the candidate and against the baseline. The baseline is `--against-policy` when given; otherwise it is the decision logged in each row, which mixes every policy that was live while the log was written. Use `--against-policy` to isolate one change. A row is listed when the two decisions differ.
 

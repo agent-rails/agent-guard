@@ -994,11 +994,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     replay = sub.add_parser(
         "replay",
-        help="list logged decisions a candidate policy would change (no execution, no writes)",
+        help="list logged decisions a candidate policy would change (no execution, no policy or audit writes)",
         description=(
             "Re-evaluates the stored command of every decision row in the local audit JSONL against a candidate "
-            "policy and compares it with the logged decision or with --against-policy. Reads only; exits 3 when "
-            "a --must-block command is allowed and 1 on any input error."
+            "policy and compares it with the logged decision or with --against-policy. Does not write the policy, "
+            "audit log or any state file; exits 3 when a --must-block command is allowed and 1 on any input error."
         ),
     )
     replay.add_argument("--policy", required=True, help="candidate policy file (yaml/json)")
