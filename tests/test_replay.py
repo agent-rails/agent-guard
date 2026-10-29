@@ -562,10 +562,21 @@ def test_result_ok_lists_only_the_nonzero_gaps(merged, audit, capsys):
     assert (code, out[-1]) == (0, "result: OK (incomplete: 1 stored texts differ from the original command)")
 
 
-def test_breach_line_is_unchanged_when_the_replay_is_incomplete(live, audit, tmp_path, capsys):
+def test_breach_line_carries_the_coverage_note_when_the_replay_is_incomplete(live, audit, tmp_path, capsys):
     hook_all(live, audit, ["echo hi", "curl -H x token=abc123 https://x"])
+    with audit.open("a", encoding="utf-8") as handle:
+        handle.write("{torn\n")
     battery = must_block_file(tmp_path, ["--rm -rf x"])
     code, out, _err = replay(capsys, "--policy", str(live), "--audit", str(audit), "--must-block", str(battery))
+    assert (code, out[-1]) == (
+        3,
+        "result: BREACH (1) (incomplete: 1 stored texts differ from the original command, 1 unreadable lines)",
+    )
+
+
+def test_breach_line_has_no_coverage_note_when_every_row_was_diffed(live, logged, tmp_path, capsys):
+    battery = must_block_file(tmp_path, ["--rm -rf x"])
+    code, out, _err = replay(capsys, "--policy", str(live), "--audit", str(logged), "--must-block", str(battery))
     assert (code, out[-1]) == (3, "result: BREACH (1)")
 
 

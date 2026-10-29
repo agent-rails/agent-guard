@@ -215,15 +215,16 @@ def render_replay(
     if must_block is not None:
         lines += _must_block_lines(must_block)
     breaches = len(must_block.breaches) if must_block else 0
-    lines.append(f"result: BREACH ({breaches})" if breaches else _ok_line(result))
+    verdict = f"BREACH ({breaches})" if breaches else "OK"
+    lines.append(f"result: {verdict}{_coverage_note(result)}")
     return "\n".join(lines)
 
 
-def _ok_line(result: ReplayResult) -> str:
+def _coverage_note(result: ReplayResult) -> str:
     gaps = [
         (result.not_diffed, "stored texts differ from the original command"),
         (result.unreadable, "unreadable lines"),
         (result.skipped, "skipped rows"),
     ]
     named = [f"{count} {label}" for count, label in gaps if count]
-    return f"result: OK (incomplete: {', '.join(named)})" if named else "result: OK"
+    return f" (incomplete: {', '.join(named)})" if named else ""
