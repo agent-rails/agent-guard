@@ -142,6 +142,7 @@ Copy-paste runnable MCP walkthrough: [`examples/mcp/`](examples/mcp/) — a poli
 ```bash
 guard install claude-code --mode observe   # audit every Bash call, block nothing
 guard report                               # is it firing, and what would it have blocked?
+guard replay --policy new.json             # which logged decisions would new.json change?
 guard install claude-code --mode enforce   # block denies, ask on require_human
 ```
 
