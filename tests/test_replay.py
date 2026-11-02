@@ -79,6 +79,7 @@ def decision_row(ts: str, cmd: str, decision: str = "allow", rule_id: str | None
     row = {
         "ts": ts,
         "agent_id": "claude-code:s1",
+        "tool": "shell",
         "event": "decision",
         "decision": decision,
         "rule_id": rule_id,
@@ -162,7 +163,7 @@ def test_selftest_fault_and_unreadable_rows_are_excluded_and_counted(merged, tmp
     with audit.open("a", encoding="utf-8") as handle:
         handle.write('{torn line\n[]\n{"ts": "2026-10-23T09:00:00"}\n\n')
     code, out, _err = replay(capsys, "--policy", str(merged), "--audit", str(audit))
-    assert code == 0
+    assert code == 4
     assert out[3] == counts_line(replayed=1, selftest=1, faults=2, unreadable=3)
 
 
@@ -174,6 +175,10 @@ SKIPPED_OVERRIDES = [
     pytest.param({"args": {"cmd": "rm -rf /x", "cmd_sha256": None, "cmd_len": 9}}, id="cmd-sha256-null"),
     pytest.param({"event": "release"}, id="event-not-decision"),
     pytest.param({"event": None}, id="event-missing"),
+    pytest.param({"tool": "hook"}, id="tool-not-shell"),
+    pytest.param({"tool": None}, id="tool-missing"),
+    pytest.param({"agent_id": "other:s1"}, id="agent-not-claude-code"),
+    pytest.param({"agent_id": None}, id="agent-missing"),
 ]
 
 
@@ -187,7 +192,7 @@ def test_rows_with_missing_or_malformed_fields_are_skipped_and_counted(merged, a
         ],
     )
     code, out, _err = replay(capsys, "--policy", str(merged), "--audit", str(audit), "--against-policy", str(merged))
-    assert code == 0
+    assert code == 4
     assert out[3] == counts_line(replayed=1, skipped=1)
 
 
@@ -201,7 +206,7 @@ def test_an_invalid_logged_decision_is_skipped_only_when_it_is_the_baseline(merg
         ],
     )
     code, out, _err = replay(capsys, "--policy", str(merged), "--audit", str(audit))
-    assert (code, out[3]) == (0, counts_line(replayed=1, skipped=1))
+    assert (code, out[3]) == (4, counts_line(replayed=1, skipped=1))
     code, out, _err = replay(capsys, "--policy", str(merged), "--audit", str(audit), "--against-policy", str(merged))
     assert (code, out[3]) == (0, counts_line(replayed=2))
 
@@ -212,7 +217,7 @@ def test_redacted_and_truncated_rows_are_counted_as_differing_from_the_original(
     assert rows[1]["args"]["cmd"] == "curl -H x token=*** https://x"
     assert len(rows[2]["args"]["cmd"].encode()) == 2048
     code, out, _err = replay(capsys, "--policy", str(merged), "--audit", str(audit))
-    assert code == 0
+    assert code == 4
     assert out[3:6] == [
         counts_line(replayed=1),
         "not diffed (stored text differs from the original command): 2",
@@ -226,7 +231,7 @@ def test_a_row_cut_at_2048_bytes_is_not_diffed_so_a_match_past_the_cut_is_not_re
     for argv in ([], ["--against-policy", str(merged)]):
         code, out, _err = replay(capsys, "--policy", str(merged), "--audit", str(audit), *argv)
         assert (code, out[3:6]) == (
-            0,
+            4,
             [counts_line(replayed=1), "not diffed (stored text differs from the original command): 1", "changed: 0"],
         )
 
@@ -418,7 +423,7 @@ def test_a_stored_command_with_a_lone_surrogate_is_skipped_not_fatal(merged, aud
     audit.parent.mkdir()
     audit.write_text(good + "\n" + bad + "\n")
     code, out, _err = replay(capsys, "--policy", str(merged), "--audit", str(audit))
-    assert (code, out[3]) == (0, counts_line(replayed=1, skipped=1))
+    assert (code, out[3]) == (4, counts_line(replayed=1, skipped=1))
 
 
 @pytest.fixture
@@ -550,7 +555,7 @@ def test_result_ok_names_the_rows_it_could_not_check_faithfully(merged, audit, c
     with audit.open("a", encoding="utf-8") as handle:
         handle.write("{torn\n" + json.dumps({"ts": "2026-10-23T09:00:00+00:00", "event": "decision"}) + "\n")
     code, out, _err = replay(capsys, "--policy", str(merged), "--audit", str(audit))
-    assert code == 0
+    assert code == 4
     assert out[-1] == (
         "result: OK (incomplete: 2 stored texts differ from the original command, 1 unreadable lines, 1 skipped rows)"
     )
@@ -559,7 +564,7 @@ def test_result_ok_names_the_rows_it_could_not_check_faithfully(merged, audit, c
 def test_result_ok_lists_only_the_nonzero_gaps(merged, audit, capsys):
     hook_all(merged, audit, ["echo hi", "curl -H x token=abc123 https://x"])
     code, out, _err = replay(capsys, "--policy", str(merged), "--audit", str(audit))
-    assert (code, out[-1]) == (0, "result: OK (incomplete: 1 stored texts differ from the original command)")
+    assert (code, out[-1]) == (4, "result: OK (incomplete: 1 stored texts differ from the original command)")
 
 
 def test_breach_line_carries_the_coverage_note_when_the_replay_is_incomplete(live, audit, tmp_path, capsys):
@@ -590,7 +595,7 @@ def test_an_unhashable_logged_decision_is_skipped_not_fatal(merged, audit, capsy
         ],
     )
     code, out, _err = replay(capsys, "--policy", str(merged), "--audit", str(audit))
-    assert (code, out[3]) == (0, counts_line(replayed=1, skipped=1))
+    assert (code, out[3]) == (4, counts_line(replayed=1, skipped=1))
 
 
 CRASHING_RULES = [
@@ -742,7 +747,7 @@ def test_a_hook_redacted_row_replayed_under_its_own_policy_is_not_diffed(tmp_pat
     redacted = json.loads(audit.read_text().splitlines()[1])
     assert (redacted["decision"], redacted["args"]["cmd"]) == ("deny", "curl -H token=*** x")
     code, out, _err = replay(capsys, "--policy", str(policy), "--audit", str(audit))
-    assert code == 0
+    assert code == 4
     assert out[3:6] == [
         counts_line(replayed=1),
         "not diffed (stored text differs from the original command): 1",
@@ -758,3 +763,46 @@ def test_an_audit_whose_every_row_differs_from_the_original_exits_one(tmp_path, 
         [],
         "replay failed: no decision row has stored text matching the original command (2 not diffed)\n",
     )
+
+
+ALLOW_ALL = {"default": "allow", "rules": []}
+
+
+def test_a_masked_deny_row_hidden_from_an_allow_all_candidate_exits_four(tmp_path, audit, capsys):
+    policy = write_policy(tmp_path / "token.json", TOKEN_POLICY)
+    hook_all(policy, audit, ["echo hi", "curl -H token=abc123 x"])
+    candidate = write_policy(tmp_path / "allow-all.json", ALLOW_ALL)
+    code, out, _err = replay(capsys, "--policy", str(candidate), "--audit", str(audit))
+    assert (code, out[5], out[-1]) == (
+        4,
+        "changed: 0",
+        "result: OK (incomplete: 1 stored texts differ from the original command)",
+    )
+
+
+def test_allow_incomplete_exits_zero_on_an_incomplete_replay(merged, audit, capsys):
+    hook_all(merged, audit, ["echo hi", "curl -H x token=abc123 https://x"])
+    code, out, _err = replay(capsys, "--policy", str(merged), "--audit", str(audit), "--allow-incomplete")
+    assert (code, out[-1]) == (0, "result: OK (incomplete: 1 stored texts differ from the original command)")
+
+
+def test_allow_incomplete_does_not_mask_a_must_block_breach(live, audit, tmp_path, capsys):
+    hook_all(live, audit, ["echo hi", "curl -H x token=abc123 https://x"])
+    battery = must_block_file(tmp_path, ["--rm -rf x"])
+    argv = ["--policy", str(live), "--audit", str(audit), "--must-block", str(battery), "--allow-incomplete"]
+    code, _out, _err = replay(capsys, *argv)
+    assert code == 3
+
+
+def test_a_complete_replay_exits_zero(merged, audit, capsys):
+    hook_all(merged, audit, ["echo hi", "rm -rf /tmp/x"])
+    code, out, _err = replay(capsys, "--policy", str(merged), "--audit", str(audit))
+    assert (code, out[-1]) == (0, "result: OK")
+
+
+def test_control_characters_in_an_error_path_are_escaped(audit, tmp_path, capsys):
+    hook(write_policy(tmp_path / "p.json", ALLOW_ALL), audit, "echo hi")
+    code, out, err = replay(capsys, "--policy", str(tmp_path / "x\x1b[31mRED"), "--audit", str(audit))
+    assert (code, out) == (1, [])
+    assert "\x1b" not in err
+    assert "x\\x1b[31mRED" in err

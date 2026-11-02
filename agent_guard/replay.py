@@ -89,6 +89,8 @@ def read_replay_audit(path: Path) -> tuple[list[dict], int]:
 
 
 def _stored_command(record: dict, logged_baseline: bool) -> str | None:
+    if record.get("tool") != "shell" or not str(record.get("agent_id")).startswith("claude-code:"):
+        return None
     args = record.get("args")
     if not isinstance(args, dict) or not isinstance(args.get("cmd"), str):
         return None
@@ -217,6 +219,10 @@ def render_replay(
     verdict = f"BREACH ({breaches})" if breaches else "OK"
     lines.append(f"result: {verdict}{_coverage_note(result)}")
     return "\n".join(lines)
+
+
+def is_incomplete(result: ReplayResult) -> bool:
+    return bool(result.not_diffed or result.unreadable or result.skipped)
 
 
 def _coverage_note(result: ReplayResult) -> str:

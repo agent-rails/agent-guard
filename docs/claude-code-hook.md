@@ -135,7 +135,7 @@ Use it to review observe-mode data before switching to enforce. Its limits:
 ## guard replay
 
 ```bash
-guard replay --policy CANDIDATE [--audit PATH] [--against-policy CURRENT] [--must-block FILE]
+guard replay --policy CANDIDATE [--audit PATH] [--against-policy CURRENT] [--must-block FILE] [--allow-incomplete]
 ```
 
 Shows which logged decisions a policy edit would change, before the edit goes live. It reads the audit log (default: the hook's XDG state path, as for `guard report`), the policy files and the must-block file. It does not write the policy, audit log or any state file, makes no network call, runs no judge, executes no command, and never applies the candidate. A symlink at the audit path is followed for reading.
@@ -155,7 +155,7 @@ must-block: must-block.json (9)
 result: OK (incomplete: 9 stored texts differ from the original command)
 ```
 
-Changes are grouped by transition, largest group first, then by name; rows within a group are ordered by timestamp. Every changed row is listed with the rule before and after (`policy default` when none matched) and the first 160 code points of the stored command. Printed fields have control characters escaped. Self-test, fault and unreadable rows are excluded and counted. A decision row without a string `args.cmd`, a string `args.cmd_sha256`, or, when the logged decision is the baseline, a valid logged `decision` is counted as skipped, as is a row whose `event` is not `decision`.
+Changes are grouped by transition, largest group first, then by name; rows within a group are ordered by timestamp. Every changed row is listed with the rule before and after (`policy default` when none matched) and the first 160 code points of the stored command. Printed fields have control characters escaped. Self-test, fault and unreadable rows are excluded and counted. A decision row without `tool` `shell`, an `agent_id` starting with `claude-code:`, a string `args.cmd`, a string `args.cmd_sha256`, or, when the logged decision is the baseline, a valid logged `decision` is counted as skipped, as is a row whose `event` is not `decision`. These checks reject rows the hook did not write in that shape; they do not authenticate the log, and anyone who can write the audit file can forge a row that passes them.
 
 `--must-block FILE` is a JSON array of non-empty command strings. Each entry is evaluated as one command, so an entry may span lines. Every entry the candidate allows is printed as `BREACH`; `require_human` and `deny` are not breaches.
 
@@ -163,8 +163,9 @@ The `result` line covers the must-block check only: `BREACH (N)` when the candid
 
 | Exit | Meaning |
 |---|---|
-| 0 | Ran; no must-block command is allowed. Changed rows alone do not fail it |
-| 3 | At least one must-block command is allowed by the candidate |
+| 0 | Ran; no must-block command is allowed and every row was checked, or `--allow-incomplete` was given. Changed rows alone do not fail it |
+| 3 | At least one must-block command is allowed by the candidate (takes precedence over 4) |
+| 4 | Ran; no must-block command is allowed, but some rows were not diffed, unreadable or skipped, so the replay is incomplete. `--allow-incomplete` turns this into 0 |
 | 1 | No report: the audit, policy or must-block path is not a regular file (checked before opening; symlinks are followed), the audit file is missing or unreadable or has a line nested too deeply to parse, no row is replayable (including when every row's stored text differs from the original), a policy fails to load, names an unknown `min_trust_tier`, has a rule that cannot be evaluated or has a `judge` rule, or the must-block file is unreadable, not a JSON array, empty, or holds an entry that is not a non-empty string |
 | 2 | Argument error |
 
