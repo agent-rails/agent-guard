@@ -159,13 +159,13 @@ Changes are grouped by transition, largest group first, then by name; rows withi
 
 `--must-block FILE` is a JSON array of non-empty command strings. Each entry is evaluated as one command, so an entry may span lines. Every entry the candidate allows is printed as `BREACH`; `require_human` and `deny` are not breaches.
 
-The `result` line covers the must-block check only: `BREACH (N)` when the candidate allows N must-block commands, otherwise `OK`, including when no `--must-block` file is given. It does not judge the changed rows. Either result is followed by `(incomplete: ...)` naming the nonzero counts of rows whose stored text differs from the original command, unreadable lines and skipped rows, none of which the replay could check as they ran.
+The `result` line covers the must-block check only: `BREACH (N)` when the candidate allows N must-block commands, otherwise `OK`, including when no `--must-block` file is given. It does not judge the changed rows. Either result is followed by `(incomplete: ...)` naming the nonzero counts of rows whose stored text differs from the original command, unreadable lines, skipped rows and fault rows, none of which the replay could check as they ran.
 
 | Exit | Meaning |
 |---|---|
-| 0 | Ran; no must-block command is allowed and every row was checked, or `--allow-incomplete` was given. Changed rows alone do not fail it |
+| 0 | Ran; no must-block command is allowed and every row was checked (no rows not diffed, unreadable, skipped or faulted), or `--allow-incomplete` was given. Changed rows alone do not fail it |
 | 3 | At least one must-block command is allowed by the candidate (takes precedence over 4) |
-| 4 | Ran; no must-block command is allowed, but some rows were not diffed, unreadable or skipped, so the replay is incomplete. `--allow-incomplete` turns this into 0 |
+| 4 | Ran; no must-block command is allowed, but some rows were not diffed, unreadable, skipped or faults, so the replay is incomplete. A fault row means the hook did not evaluate that call (in observe mode it ran unchecked), and it stores no command to replay. `--allow-incomplete` turns this into 0 |
 | 1 | No report: the audit, policy or must-block path is not a regular file (checked before opening; symlinks are followed), the audit file is missing or unreadable or has a line nested too deeply to parse, no row is replayable (including when every row's stored text differs from the original), a policy fails to load, names an unknown `min_trust_tier`, has a rule that cannot be evaluated or has a `judge` rule, or the must-block file is unreadable, not a JSON array, empty, or holds an entry that is not a non-empty string |
 | 2 | Argument error |
 

@@ -806,3 +806,11 @@ def test_control_characters_in_an_error_path_are_escaped(audit, tmp_path, capsys
     assert (code, out) == (1, [])
     assert "\x1b" not in err
     assert "x\\x1b[31mRED" in err
+
+
+def test_a_fault_row_makes_the_replay_incomplete(merged, tmp_path, audit, capsys):
+    hook(merged, audit, "echo hi")
+    hook(tmp_path / "missing.json", audit, "rm -rf /", tool_use_id="toolu_2")
+    code, out, _err = replay(capsys, "--policy", str(merged), "--audit", str(audit))
+    assert (code, out[3]) == (4, counts_line(replayed=1, faults=1))
+    assert out[-1] == "result: OK (incomplete: 1 fault rows with no command to replay)"

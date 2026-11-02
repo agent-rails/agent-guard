@@ -222,7 +222,7 @@ def render_replay(
 
 
 def is_incomplete(result: ReplayResult) -> bool:
-    return bool(result.not_diffed or result.unreadable or result.skipped)
+    return bool(result.not_diffed or result.unreadable or result.skipped or result.faults)
 
 
 def _coverage_note(result: ReplayResult) -> str:
@@ -230,6 +230,7 @@ def _coverage_note(result: ReplayResult) -> str:
         (result.not_diffed, "stored texts differ from the original command"),
         (result.unreadable, "unreadable lines"),
         (result.skipped, "skipped rows"),
+        (result.faults, "fault rows with no command to replay"),
     ]
     named = [f"{count} {label}" for count, label in gaps if count]
     return f" (incomplete: {', '.join(named)})" if named else ""

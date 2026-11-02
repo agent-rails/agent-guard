@@ -1016,7 +1016,7 @@ def build_parser() -> argparse.ArgumentParser:
     replay.add_argument(
         "--allow-incomplete",
         action="store_true",
-        help="exit 0 instead of 4 when rows are not diffed, unreadable or skipped",
+        help="exit 0 instead of 4 when rows are not diffed, unreadable, skipped or faults",
     )
     replay.set_defaults(func=_replay)
 
