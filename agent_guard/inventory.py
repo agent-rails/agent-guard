@@ -73,7 +73,7 @@ def _utc(stamp: str) -> datetime:
     return datetime.fromisoformat(stamp).astimezone(timezone.utc)
 
 
-def _identity(row: dict) -> tuple[str, str | None] | None:
+def row_identity(row: dict) -> tuple[str, str | None] | None:
     actor = _text(row.get("actor")) or _text(row.get("agent_id"))
     tenant = row.get("tenant_id")
     if actor is None or not isinstance(row.get("tool"), str) or (tenant is not None and not _text(tenant)):
@@ -93,7 +93,7 @@ def build_inventory(audit_path: Path, issuance_path: Path | None = None) -> Inve
     entries: dict[tuple[str, str | None], AgentEntry] = {}
     not_counted = 0
     for row in rows:
-        identity = _identity(row)
+        identity = row_identity(row)
         if identity is None:
             malformed += 1
             continue

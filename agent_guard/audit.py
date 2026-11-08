@@ -61,6 +61,7 @@ class AuditRecord:
     actor: str | None = None
     parent_actor: str | None = None
     host: str | None = None
+    purpose: str | None = None
     schema_version: int | None = None
 
     def __post_init__(self) -> None:
@@ -77,6 +78,7 @@ V2_EVIDENCE_FIELDS = (
     "actor",
     "parent_actor",
     "host",
+    "purpose",
 )
 _OPTIONAL_FIELDS = ("event", "call_id", "call_digest", "outcome", *V2_EVIDENCE_FIELDS, "schema_version")
 
@@ -298,6 +300,7 @@ def build_record(
     actor: str | None = None,
     parent_actor: str | None = None,
     host: str | None = None,
+    purpose: str | None = None,
 ) -> AuditRecord:
     return AuditRecord(
         ts=datetime.now(timezone.utc).isoformat(),
@@ -321,6 +324,7 @@ def build_record(
         actor=actor,
         parent_actor=parent_actor,
         host=host,
+        purpose=purpose,
     )
 
 

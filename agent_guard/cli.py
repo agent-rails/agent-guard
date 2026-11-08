@@ -23,6 +23,7 @@ from agent_guard import (
     load_policy,
     with_bundled,
 )
+from agent_guard import detect as audit_detect
 from agent_guard import inventory as audit_inventory
 from agent_guard import replay as audit_replay
 from agent_guard import report as audit_report
@@ -720,6 +721,41 @@ def _inventory(args) -> int:
     return 4 if audit_inventory.is_incomplete(result) else 0
 
 
+def _timestamp(text: str) -> datetime:
+    try:
+        stamp = datetime.fromisoformat(text)
+    except ValueError as err:
+        raise audit_detect.DetectError(f"not an ISO timestamp: {text!r}") from err
+    if stamp.tzinfo is None:
+        raise audit_detect.DetectError(f"timestamp needs a UTC offset: {text!r}")
+    return stamp
+
+
+def _optional_timestamp(text: str | None) -> datetime | None:
+    return _timestamp(text) if text else None
+
+
+def _detect(args) -> int:
+    audit = Path(args.audit).expanduser().absolute()
+    try:
+        config = audit_detect.DetectConfig(
+            evaluate_from=_timestamp(args.evaluate_from),
+            baseline_from=_optional_timestamp(args.baseline_from),
+            evaluate_until=_optional_timestamp(args.evaluate_until),
+            rate_multiplier=args.rate_multiplier,
+            min_rate_events=args.min_rate_events,
+            usual_hours=audit_detect.parse_usual_hours(args.usual_hours) if args.usual_hours else None,
+        )
+        result = audit_detect.detect_file(audit, config)
+    except audit_detect.DetectError as err:
+        print(f"detect failed: {audit_report._printable(err)}", file=sys.stderr)
+        return 1
+    print(audit_detect.render_detect(result))
+    if result.alerts:
+        return 3
+    return 4 if result.malformed else 0
+
+
 # Starter policy for `guard init`. Dict form is the source of truth; YAML/JSON
 # serializers derive from it so an installed wheel works without package data.
 _STARTER_POLICY: dict = {
@@ -1046,6 +1082,25 @@ def build_parser() -> argparse.ArgumentParser:
     inventory.add_argument("--audit", required=True, help="audit JSONL file")
     inventory.add_argument("--issuance", help="credential injector issuance JSONL file")
     inventory.set_defaults(func=_inventory)
+
+    detect = sub.add_parser(
+        "detect",
+        help="flag persona deviations in an audit log (no execution, no writes)",
+        description=(
+            "Compares an evaluation window with a baseline window per persona (the purpose field, else the actor, "
+            "per tenant): first use of a tool or resource, hourly rate above a multiple of the baseline rate, and "
+            "activity outside --usual-hours. Deterministic, off the request path. Exits 3 when alerts are raised, "
+            "4 when only malformed lines were found and 1 on an input error."
+        ),
+    )
+    detect.add_argument("--audit", required=True, help="audit JSONL file")
+    detect.add_argument("--evaluate-from", required=True, help="ISO timestamp with offset; earlier rows are baseline")
+    detect.add_argument("--baseline-from", help="ISO timestamp with offset; default: earliest baseline row")
+    detect.add_argument("--evaluate-until", help="ISO timestamp with offset, exclusive; default: no upper bound")
+    detect.add_argument("--rate-multiplier", type=float, default=3.0, help="alert above K x baseline hourly rate")
+    detect.add_argument("--min-rate-events", type=int, default=5, help="ignore hours with fewer events than this")
+    detect.add_argument("--usual-hours", help="UTC hours START-END (END exclusive, wraps midnight); omit to skip")
+    detect.set_defaults(func=_detect)
 
     return parser
 
