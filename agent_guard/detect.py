@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -44,8 +45,12 @@ class DetectConfig:
             if converted is None:
                 raise DetectError(f"{name} must be a timezone-aware time representable in UTC")
             object.__setattr__(self, name, converted)
-        if self.rate_multiplier <= 0:
-            raise DetectError("rate_multiplier must be positive")
+        if self.baseline_from is not None and self.baseline_from >= self.evaluate_from:
+            raise DetectError("baseline_from must be before evaluate_from")
+        if self.evaluate_until is not None and self.evaluate_until <= self.evaluate_from:
+            raise DetectError("evaluate_until must be after evaluate_from")
+        if not math.isfinite(self.rate_multiplier) or self.rate_multiplier <= 0:
+            raise DetectError("rate_multiplier must be a positive finite number")
         if self.min_rate_events < 1:
             raise DetectError("min_rate_events must be at least 1")
         if self.usual_hours is not None and (not self.usual_hours or not all(0 <= h <= 23 for h in self.usual_hours)):
