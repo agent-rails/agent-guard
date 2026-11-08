@@ -455,3 +455,32 @@ def test_cli_loose_key_file_refused(tmp_path, capsys):
     ]
     assert main(args) == 1
     assert "0600" in capsys.readouterr().err
+
+
+HOSTILE = "evil\x1b[31m\nalerts (99):\r\x07"
+
+
+def test_output_escapes_log_derived_fields(audit, capsys):
+    _write(audit, "2026-11-02T03:00:00+00:00", actor=HOSTILE, tool=HOSTILE, tenant_id=HOSTILE)
+    code = main(["detect", "--audit", str(audit), "--evaluate-from", "2026-11-02T00:00:00+00:00", "--allow-unsigned"])
+    out = capsys.readouterr().out
+    assert code == 3
+    assert "\x1b" not in out and "\x07" not in out and "\r" not in out
+    assert not any(line.startswith("alerts (99)") for line in out.splitlines())
+    assert "\\x1b" in out
+
+
+def test_resource_query_string_is_redacted_everywhere(audit, capsys):
+    _write(audit, "2026-11-02T03:00:00+00:00", args={"resource": "https://api.example/deploy?token=SECRET123"})
+    result = _detect(audit, DetectConfig(evaluate_from=EVALUATE_FROM))
+    assert [a.kind for a in result.alerts] == [FIRST_RESOURCE_USE]
+    assert "SECRET123" not in repr(result.alerts)
+    assert "https://api.example/deploy" in result.alerts[0].detail
+    main(["detect", "--audit", str(audit), "--evaluate-from", "2026-11-02T00:00:00+00:00", "--allow-unsigned"])
+    assert "SECRET123" not in capsys.readouterr().out
+
+
+def test_resources_differing_only_in_query_are_the_same_resource(audit):
+    _write(audit, "2026-11-01T05:00:00+00:00", args={"resource": "svc/api?a=1"})
+    _write(audit, "2026-11-02T03:00:00+00:00", args={"resource": "svc/api?a=2"})
+    assert _detect(audit, DetectConfig(evaluate_from=EVALUATE_FROM)).alerts == []

@@ -235,3 +235,14 @@ def test_inventory_excludes_and_counts_untrusted_rows(tmp_path, capsys):
     assert "untrusted rows excluded: 1" in capsys.readouterr().out
     assert main(["inventory", "--audit", str(audit), "--allow-unsigned"]) == 0
     assert "UNTRUSTED" in capsys.readouterr().out
+
+
+def test_inventory_output_escapes_log_derived_fields(tmp_path, capsys):
+    audit = tmp_path / "audit.jsonl"
+    hostile = "evil\x1b[31m\nagents (99):\r\x07"
+    _write(audit, actor=hostile, tenant_id=hostile, tool=hostile, grant_hash=hostile, decision=hostile)
+    assert main(["inventory", "--audit", str(audit), "--allow-unsigned"]) == 0
+    out = capsys.readouterr().out
+    assert "\x1b" not in out and "\x07" not in out and "\r" not in out
+    assert not any(line.startswith("agents (99)") for line in out.splitlines())
+    assert "\\x1b" in out

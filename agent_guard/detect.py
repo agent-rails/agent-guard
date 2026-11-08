@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .evidence_log import EvidenceError, EvidenceLog, Row, to_utc, trust_line
 from .inventory import DECISION_EVENTS
+from .report import _printable
 
 FIRST_TOOL_USE = "first_tool_use"
 FIRST_RESOURCE_USE = "first_resource_use"
@@ -98,7 +99,9 @@ def parse_usual_hours(text: str) -> frozenset[int]:
 def _resource(row: dict) -> str | None:
     args = row.get("args")
     value = args.get("resource") if isinstance(args, dict) else None
-    return value if isinstance(value, str) and value else None
+    if not isinstance(value, str):
+        return None
+    return value.split("?", 1)[0] or None
 
 
 def _task_roots(rows: list[dict]) -> tuple[str, ...]:
@@ -231,7 +234,7 @@ def _off_hours(evaluated: list, config: DetectConfig) -> list[Alert]:
 
 def render_detect(result: DetectResult) -> str:
     lines = [
-        f"audit: {result.audit_path}",
+        f"audit: {_printable(result.audit_path)}",
         trust_line(result.verified, result.untrusted),
         f"rows read: {result.rows}",
         f"malformed lines: {result.malformed}",
@@ -242,6 +245,7 @@ def render_detect(result: DetectResult) -> str:
     ]
     for alert in result.alerts:
         lines.append(
-            f"  [{alert.kind}] persona={alert.persona} tenant={alert.tenant_id or '-'} at {alert.ts}: {alert.detail}"
+            f"  [{alert.kind}] persona={_printable(alert.persona)} tenant={_printable(alert.tenant_id or '-')} "
+            f"at {alert.ts}: {_printable(alert.detail)}"
         )
     return "\n".join(lines)
