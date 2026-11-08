@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from .evidence_log import EvidenceError, EvidenceLog, Row, to_utc
+from .evidence_log import EvidenceError, EvidenceLog, Row, to_utc, trust_line
 from .inventory import DECISION_EVENTS
 
 FIRST_TOOL_USE = "first_tool_use"
@@ -70,6 +70,8 @@ class DetectResult:
     baseline_rows: int
     evaluated_rows: int
     alerts: list[Alert]
+    untrusted: int = 0
+    verified: bool = False
     skipped: list[str] = field(default_factory=list)
 
 
@@ -109,9 +111,11 @@ def _hour_bucket(stamp: datetime) -> datetime:
     return stamp.replace(minute=0, second=0, microsecond=0)
 
 
-def detect_file(audit_path: Path, config: DetectConfig) -> DetectResult:
+def detect_file(
+    audit_path: Path, config: DetectConfig, secret: bytes | None = None, allow_unsigned: bool = False
+) -> DetectResult:
     try:
-        log = EvidenceLog(audit_path)
+        log = EvidenceLog(audit_path, secret, allow_unsigned)
     except EvidenceError as err:
         raise DetectError(str(err)) from err
     sequence = sorted(
@@ -129,7 +133,15 @@ def detect_file(audit_path: Path, config: DetectConfig) -> DetectResult:
     ]
     alerts.sort(key=lambda alert: (alert.ts, alert.kind, alert.persona))
     return DetectResult(
-        str(audit_path), log.rows_read, log.malformed, len(baseline), len(evaluated), alerts, [DEPTH_SKIPPED]
+        str(audit_path),
+        log.rows_read,
+        log.malformed,
+        len(baseline),
+        len(evaluated),
+        alerts,
+        log.untrusted,
+        log.verified,
+        [DEPTH_SKIPPED],
     )
 
 
@@ -220,6 +232,7 @@ def _off_hours(evaluated: list, config: DetectConfig) -> list[Alert]:
 def render_detect(result: DetectResult) -> str:
     lines = [
         f"audit: {result.audit_path}",
+        trust_line(result.verified, result.untrusted),
         f"rows read: {result.rows}",
         f"malformed lines: {result.malformed}",
         f"baseline rows: {result.baseline_rows}",

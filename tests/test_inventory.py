@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 
-from agent_guard import AuditRecord, JsonlAuditSink
+import pytest
+
+from agent_guard import AuditRecord, JsonlAuditSink, SigningAuditSink
 from agent_guard.cli import main
-from agent_guard.inventory import LIMIT_TEXT, build_inventory
+from agent_guard.inventory import LIMIT_TEXT, InventoryError, build_inventory
 from agentguard_identity.credentials import IssuanceRecord, JsonlIssuanceStore
 
 
@@ -29,7 +31,7 @@ def test_groups_by_actor_and_tenant(tmp_path):
     _write(audit, actor="alice-agent", tenant_id="t1", grant_hash="g2", tool="read", ts="2026-11-01T12:00:00+02:00")
     _write(audit, actor="alice-agent", tenant_id="t2", grant_hash="g3")
     _write(audit, agent_id="legacy", ts="2026-11-02T00:00:00+00:00")
-    inventory = build_inventory(audit)
+    inventory = build_inventory(audit, allow_unsigned=True)
     by_key = {(a.actor, a.tenant_id): a for a in inventory.agents}
     assert set(by_key) == {("alice-agent", "t1"), ("alice-agent", "t2"), ("legacy", None)}
     first = by_key[("alice-agent", "t1")]
@@ -45,7 +47,7 @@ def test_actor_falls_back_to_agent_id_and_prefers_actor(tmp_path):
     audit = tmp_path / "audit.jsonl"
     _write(audit, agent_id="raw", actor="stamped")
     _write(audit, agent_id="raw2")
-    assert {a.actor for a in build_inventory(audit).agents} == {"stamped", "raw2"}
+    assert {a.actor for a in build_inventory(audit, allow_unsigned=True).agents} == {"stamped", "raw2"}
 
 
 def test_decision_counts_exclude_terminal_rows(tmp_path):
@@ -54,7 +56,7 @@ def test_decision_counts_exclude_terminal_rows(tmp_path):
     _write(audit, decision="allow", event="terminal", outcome="returned")
     _write(audit, decision="deny", event="decision")
     _write(audit, decision="allow", event=None)
-    inventory = build_inventory(audit)
+    inventory = build_inventory(audit, allow_unsigned=True)
     assert dict(inventory.agents[0].decisions) == {"allow": 2, "deny": 1}
     assert inventory.not_counted == 1
 
@@ -67,7 +69,7 @@ def test_malformed_lines_are_counted(tmp_path):
         handle.write(json.dumps({"ts": "garbage", "agent_id": "x", "tool": "t"}) + "\n")
         handle.write(json.dumps({"ts": "2026-11-01T10:00:00+00:00", "tool": "t"}) + "\n")
         handle.write(json.dumps([1, 2]) + "\n")
-    inventory = build_inventory(audit)
+    inventory = build_inventory(audit, allow_unsigned=True)
     assert inventory.malformed == 4
     assert inventory.rows == 1
     assert len(inventory.agents) == 1
@@ -96,7 +98,7 @@ def test_issuance_grouped_by_tenant_with_malformed_counted(tmp_path):
     with issuance.open("a") as handle:
         handle.write("{broken\n")
         handle.write(json.dumps({"op_id": "x"}) + "\n")
-    inventory = build_inventory(audit, issuance)
+    inventory = build_inventory(audit, issuance, allow_unsigned=True)
     assert inventory.issuance_rows == 3
     assert inventory.issuance_malformed == 2
     tenants = {t.tenant_id: t for t in inventory.tenants}
@@ -108,7 +110,7 @@ def test_issuance_grouped_by_tenant_with_malformed_counted(tmp_path):
 def test_cli_prints_limit_and_counts(tmp_path, capsys):
     audit = tmp_path / "audit.jsonl"
     _write(audit, actor="a1", tenant_id="t1", grant_hash="g1")
-    assert main(["inventory", "--audit", str(audit)]) == 0
+    assert main(["inventory", "--audit", str(audit), "--allow-unsigned"]) == 0
     out = capsys.readouterr().out
     assert LIMIT_TEXT in out
     assert "actor=a1 tenant=t1" in out
@@ -123,19 +125,21 @@ def test_cli_reports_malformed_and_exits_4(tmp_path, capsys):
     _write(audit)
     with audit.open("a") as handle:
         handle.write("nope\n")
-    assert main(["inventory", "--audit", str(audit)]) == 4
+    assert main(["inventory", "--audit", str(audit), "--allow-unsigned"]) == 4
     assert "malformed lines: 1" in capsys.readouterr().out
 
 
 def test_cli_missing_audit_is_an_error(tmp_path, capsys):
-    assert main(["inventory", "--audit", str(tmp_path / "missing.jsonl")]) == 1
+    assert main(["inventory", "--audit", str(tmp_path / "missing.jsonl"), "--allow-unsigned"]) == 1
     assert "does not exist" in capsys.readouterr().err
 
 
 def test_cli_missing_issuance_is_an_error(tmp_path, capsys):
     audit = tmp_path / "audit.jsonl"
     _write(audit)
-    assert main(["inventory", "--audit", str(audit), "--issuance", str(tmp_path / "none.jsonl")]) == 1
+    assert (
+        main(["inventory", "--audit", str(audit), "--issuance", str(tmp_path / "none.jsonl"), "--allow-unsigned"]) == 1
+    )
     assert "does not exist" in capsys.readouterr().err
 
 
@@ -143,7 +147,7 @@ def test_inventory_does_not_write(tmp_path):
     audit = tmp_path / "audit.jsonl"
     _write(audit)
     before = audit.read_bytes()
-    main(["inventory", "--audit", str(audit)])
+    main(["inventory", "--audit", str(audit), "--allow-unsigned"])
     assert audit.read_bytes() == before
     assert sorted(p.name for p in tmp_path.iterdir()) == ["audit.jsonl"]
 
@@ -157,7 +161,7 @@ def test_unconvertible_timestamps_are_malformed_not_a_crash(tmp_path):
     with audit.open("a") as handle:
         for stamp in OVERFLOW_TS:
             handle.write(json.dumps({"ts": stamp, "agent_id": "x", "tool": "t"}) + "\n")
-    inventory = build_inventory(audit)
+    inventory = build_inventory(audit, allow_unsigned=True)
     assert inventory.malformed == 2
     assert len(inventory.agents) == 1
 
@@ -187,7 +191,7 @@ def test_unconvertible_issuance_timestamps_are_malformed(tmp_path):
         json.dumps(good),
     ]
     issuance.write_text("\n".join(lines) + "\n")
-    inventory = build_inventory(audit, issuance)
+    inventory = build_inventory(audit, issuance, allow_unsigned=True)
     assert inventory.issuance_malformed == 4
     assert inventory.issuance_rows == 1
 
@@ -202,4 +206,32 @@ def test_logs_are_streamed_not_read_whole(tmp_path, monkeypatch):
         raise AssertionError("whole-file read")
 
     monkeypatch.setattr("pathlib.Path.read_text", refuse)
-    build_inventory(audit, issuance)
+    build_inventory(audit, issuance, allow_unsigned=True)
+
+
+def test_inventory_requires_key_or_allow_unsigned(tmp_path):
+    audit = tmp_path / "audit.jsonl"
+    _write(audit)
+    with pytest.raises(InventoryError, match="allow-unsigned"):
+        build_inventory(audit)
+
+
+def test_inventory_excludes_and_counts_untrusted_rows(tmp_path, capsys):
+    audit = tmp_path / "audit.jsonl"
+    secret = b"inventory-secret"
+    record = AuditRecord(
+        "2026-11-01T10:00:00+00:00", "agent-1", "deploy", {}, "allow", "ok", None, True, event="release"
+    )
+    SigningAuditSink(JsonlAuditSink(audit), secret).write(record)
+    _write(audit, agent_id="forged")
+    inventory = build_inventory(audit, secret=secret)
+    assert [a.actor for a in inventory.agents] == ["agent-1"]
+    assert (inventory.untrusted, inventory.verified) == (1, True)
+
+    key = tmp_path / "key"
+    key.write_bytes(secret)
+    key.chmod(0o600)
+    assert main(["inventory", "--audit", str(audit), "--audit-key-file", str(key)]) == 0
+    assert "untrusted rows excluded: 1" in capsys.readouterr().out
+    assert main(["inventory", "--audit", str(audit), "--allow-unsigned"]) == 0
+    assert "UNTRUSTED" in capsys.readouterr().out
