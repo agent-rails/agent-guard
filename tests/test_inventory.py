@@ -69,7 +69,7 @@ def test_malformed_lines_are_counted(tmp_path):
         handle.write(json.dumps([1, 2]) + "\n")
     inventory = build_inventory(audit)
     assert inventory.malformed == 4
-    assert inventory.rows == 2
+    assert inventory.rows == 1
     assert len(inventory.agents) == 1
 
 
@@ -146,3 +146,60 @@ def test_inventory_does_not_write(tmp_path):
     main(["inventory", "--audit", str(audit)])
     assert audit.read_bytes() == before
     assert sorted(p.name for p in tmp_path.iterdir()) == ["audit.jsonl"]
+
+
+OVERFLOW_TS = ["0001-01-01T00:00:00+01:00", "9999-12-31T23:59:59-01:00"]
+
+
+def test_unconvertible_timestamps_are_malformed_not_a_crash(tmp_path):
+    audit = tmp_path / "audit.jsonl"
+    _write(audit)
+    with audit.open("a") as handle:
+        for stamp in OVERFLOW_TS:
+            handle.write(json.dumps({"ts": stamp, "agent_id": "x", "tool": "t"}) + "\n")
+    inventory = build_inventory(audit)
+    assert inventory.malformed == 2
+    assert len(inventory.agents) == 1
+
+
+def test_unconvertible_issuance_timestamps_are_malformed(tmp_path):
+    audit = tmp_path / "audit.jsonl"
+    _write(audit)
+    issuance = tmp_path / "issuance.jsonl"
+    good = {
+        "issuance_id": "i",
+        "op_id": "o",
+        "tenant_id": "t",
+        "task_id": "k",
+        "tool": "deploy",
+        "request_digest": "d",
+        "executor_key_id": "e",
+        "audience": "a",
+        "issued_at": 1.0,
+        "expires_at": 2.0,
+    }
+    lines = [
+        json.dumps({**good, "issued_at": 10**100}),
+        json.dumps({**good, "issued_at": 1e300}),
+        '{"issuance_id":"i","op_id":"o","tenant_id":"t","task_id":"k","tool":"d","request_digest":"d",'
+        '"executor_key_id":"e","audience":"a","issued_at":NaN,"expires_at":2.0}',
+        json.dumps({**good, "expires_at": 10**100}),
+        json.dumps(good),
+    ]
+    issuance.write_text("\n".join(lines) + "\n")
+    inventory = build_inventory(audit, issuance)
+    assert inventory.issuance_malformed == 4
+    assert inventory.issuance_rows == 1
+
+
+def test_logs_are_streamed_not_read_whole(tmp_path, monkeypatch):
+    audit = tmp_path / "audit.jsonl"
+    _write(audit)
+    issuance = tmp_path / "issuance.jsonl"
+    issuance.write_text("")
+
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("whole-file read")
+
+    monkeypatch.setattr("pathlib.Path.read_text", refuse)
+    build_inventory(audit, issuance)

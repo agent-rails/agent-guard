@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
-from .inventory import DECISION_EVENTS, row_identity
-from .report import read_audit
+from .evidence_log import EvidenceError, EvidenceLog, Row, to_utc
+from .inventory import DECISION_EVENTS
 
 FIRST_TOOL_USE = "first_tool_use"
 FIRST_RESOURCE_USE = "first_resource_use"
@@ -37,8 +37,12 @@ class DetectConfig:
     def __post_init__(self) -> None:
         for name in ("evaluate_from", "baseline_from", "evaluate_until"):
             value = getattr(self, name)
-            if value is not None and value.tzinfo is None:
-                raise DetectError(f"{name} must be timezone-aware")
+            if value is None:
+                continue
+            converted = to_utc(value)
+            if converted is None:
+                raise DetectError(f"{name} must be a timezone-aware time representable in UTC")
+            object.__setattr__(self, name, converted)
         if self.rate_multiplier <= 0:
             raise DetectError("rate_multiplier must be positive")
         if self.min_rate_events < 1:
@@ -72,14 +76,8 @@ class DetectResult:
 Persona = tuple[str, str | None]
 
 
-def persona_of(row: dict) -> Persona | None:
-    identity = row_identity(row)
-    if identity is None:
-        return None
-    purpose = row.get("purpose")
-    if purpose is not None and not (isinstance(purpose, str) and purpose):
-        return None
-    return (purpose or identity[0]), identity[1]
+def persona_of(row: Row) -> Persona:
+    return (row.data.get("purpose") or row.actor), row.tenant_id
 
 
 def parse_usual_hours(text: str) -> frozenset[int]:
@@ -111,21 +109,16 @@ def _hour_bucket(stamp: datetime) -> datetime:
     return stamp.replace(minute=0, second=0, microsecond=0)
 
 
-def detect_rows(audit_path: str, rows: list[dict], malformed: int, config: DetectConfig) -> DetectResult:
-    sequence: list[tuple[datetime, Persona, dict]] = []
-    for row in rows:
-        persona = persona_of(row)
-        if persona is None:
-            malformed += 1
-            continue
-        if row.get("event") not in DECISION_EVENTS:
-            continue
-        sequence.append((datetime.fromisoformat(row["ts"]).astimezone(timezone.utc), persona, row))
-    sequence.sort(key=lambda item: item[0])
-
-    start = config.baseline_from.astimezone(timezone.utc) if config.baseline_from else None
-    boundary = config.evaluate_from.astimezone(timezone.utc)
-    until = config.evaluate_until.astimezone(timezone.utc) if config.evaluate_until else None
+def detect_file(audit_path: Path, config: DetectConfig) -> DetectResult:
+    try:
+        log = EvidenceLog(audit_path)
+    except EvidenceError as err:
+        raise DetectError(str(err)) from err
+    sequence = sorted(
+        ((row.ts, persona_of(row), row.data) for row in log.rows() if row.data.get("event") in DECISION_EVENTS),
+        key=lambda item: item[0],
+    )
+    start, boundary, until = config.baseline_from, config.evaluate_from, config.evaluate_until
     baseline = [item for item in sequence if (start is None or item[0] >= start) and item[0] < boundary]
     evaluated = [item for item in sequence if item[0] >= boundary and (until is None or item[0] < until)]
 
@@ -135,14 +128,9 @@ def detect_rows(audit_path: str, rows: list[dict], malformed: int, config: Detec
         *_off_hours(evaluated, config),
     ]
     alerts.sort(key=lambda alert: (alert.ts, alert.kind, alert.persona))
-    return DetectResult(audit_path, len(rows), malformed, len(baseline), len(evaluated), alerts, [DEPTH_SKIPPED])
-
-
-def detect_file(audit_path: Path, config: DetectConfig) -> DetectResult:
-    if not audit_path.exists():
-        raise DetectError(f"audit file {audit_path} does not exist")
-    rows, malformed = read_audit(audit_path)
-    return detect_rows(str(audit_path), rows, malformed, config)
+    return DetectResult(
+        str(audit_path), log.rows_read, log.malformed, len(baseline), len(evaluated), alerts, [DEPTH_SKIPPED]
+    )
 
 
 def _first_use(baseline: list, evaluated: list) -> list[Alert]:

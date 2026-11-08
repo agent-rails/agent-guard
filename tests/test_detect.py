@@ -250,3 +250,28 @@ def test_alerts_carry_task_roots_from_evidence(audit):
     by_kind = {alert.kind: alert for alert in result.alerts}
     assert by_kind[RATE_ABOVE_BASELINE].task_roots == ("root-0", "root-1")
     assert by_kind[FIRST_TOOL_USE].task_roots == ("root-9",)
+
+
+@pytest.mark.parametrize("stamp", ["0001-01-01T00:00:00+01:00", "9999-12-31T23:59:59-01:00"])
+def test_unconvertible_timestamp_is_malformed_and_alerts_survive(audit, stamp):
+    with audit.open("a") as handle:
+        handle.write(json.dumps({"ts": stamp, "agent_id": "x", "tool": "t"}) + "\n")
+    _write(audit, "2026-11-02T03:00:00+00:00", tool="delete_prod", args={"resource": "svc/api"})
+    result = detect_file(audit, DetectConfig(evaluate_from=EVALUATE_FROM))
+    assert result.malformed == 1
+    assert _kinds(result) == [FIRST_TOOL_USE]
+
+
+def test_unknown_event_is_malformed(audit):
+    _write(audit, "2026-11-02T03:00:00+00:00", event="relabelled")
+    result = detect_file(audit, DetectConfig(evaluate_from=EVALUATE_FROM))
+    assert result.malformed == 1
+    assert result.evaluated_rows == 0
+
+
+def test_detect_streams_the_log(audit, monkeypatch):
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("whole-file read")
+
+    monkeypatch.setattr("pathlib.Path.read_text", refuse)
+    detect_file(audit, DetectConfig(evaluate_from=EVALUATE_FROM))
