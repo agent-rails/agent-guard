@@ -29,6 +29,7 @@ from agent_guard import replay as audit_replay
 from agent_guard import report as audit_report
 from agent_guard.claude_code import MODES, HookOptions, run_hook
 from agent_guard.guard import ApprovalGrant, ApprovalRequest, deny_by_default
+from agent_guard.keyfile import load_key_file
 from agent_guard.mcp import run_proxy
 from agentguard_identity import Broker, ContainerRuntime, LocalAttestor, LocalRuntime, RefusedError, RuntimeSpec
 
@@ -709,12 +710,16 @@ def _replay(args) -> int:
     return 0
 
 
+def _audit_secret(args) -> bytes | None:
+    return load_key_file(args.audit_key_file, "audit signing key") if args.audit_key_file else None
+
+
 def _inventory(args) -> int:
     audit = Path(args.audit).expanduser().absolute()
     issuance = Path(args.issuance).expanduser().absolute() if args.issuance else None
     try:
-        result = audit_inventory.build_inventory(audit, issuance)
-    except audit_inventory.InventoryError as err:
+        result = audit_inventory.build_inventory(audit, issuance, _audit_secret(args), args.allow_unsigned)
+    except (audit_inventory.InventoryError, ValueError) as err:
         print(f"inventory failed: {audit_report._printable(err)}", file=sys.stderr)
         return 1
     print(audit_inventory.render_inventory(result))
@@ -746,8 +751,8 @@ def _detect(args) -> int:
             min_rate_events=args.min_rate_events,
             usual_hours=audit_detect.parse_usual_hours(args.usual_hours) if args.usual_hours else None,
         )
-        result = audit_detect.detect_file(audit, config)
-    except audit_detect.DetectError as err:
+        result = audit_detect.detect_file(audit, config, _audit_secret(args), args.allow_unsigned)
+    except (audit_detect.DetectError, ValueError) as err:
         print(f"detect failed: {audit_report._printable(err)}", file=sys.stderr)
         return 1
     print(audit_detect.render_detect(result))
@@ -876,6 +881,18 @@ def _init(args) -> int:
     print(f"next: guard rules --policy {path}")
     print(f"      guard explain --policy {path} -- rm -rf /tmp/x")
     return 0
+
+
+def _add_trust_arguments(parser) -> None:
+    parser.add_argument(
+        "--audit-key-file",
+        help="audit signing key file (mode 0600); rows whose signature does not verify are excluded and counted",
+    )
+    parser.add_argument(
+        "--allow-unsigned",
+        action="store_true",
+        help="read the log without verifying signatures; results are untrusted",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1081,6 +1098,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     inventory.add_argument("--audit", required=True, help="audit JSONL file")
     inventory.add_argument("--issuance", help="credential injector issuance JSONL file")
+    _add_trust_arguments(inventory)
     inventory.set_defaults(func=_inventory)
 
     detect = sub.add_parser(
@@ -1094,6 +1112,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     detect.add_argument("--audit", required=True, help="audit JSONL file")
+    _add_trust_arguments(detect)
     detect.add_argument("--evaluate-from", required=True, help="ISO timestamp with offset; earlier rows are baseline")
     detect.add_argument("--baseline-from", help="ISO timestamp with offset; default: earliest baseline row")
     detect.add_argument("--evaluate-until", help="ISO timestamp with offset, exclusive; default: no upper bound")

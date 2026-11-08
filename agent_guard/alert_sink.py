@@ -5,8 +5,6 @@ import binascii
 import hashlib
 import hmac
 import json
-import os
-import stat
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -15,6 +13,7 @@ from typing import Protocol
 from agentguard_identity.credentials import CredentialInjector
 
 from .detect import ALERT_KINDS, Alert
+from .keyfile import load_key_file
 
 SUSPEND = "suspend"
 REVOKE_TASK = "revoke_task"
@@ -44,26 +43,8 @@ class AlertOutcome:
 
 
 def load_writer_key(path: str | Path) -> bytes:
-    """Read the alert writer key. Refuses a symlink, a non-regular file, a file not owned by the current user, a
-    file readable or writable by group or others, and a key shorter than 32 bytes."""
-    try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-    except OSError as err:
-        raise ValueError(f"cannot open alert writer key {path} (a symlink is refused): {err}") from err
-    try:
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode):
-            raise ValueError(f"alert writer key {path} is not a regular file")
-        if info.st_uid != os.geteuid():
-            raise ValueError(f"alert writer key {path} is not owned by the current user")
-        if info.st_mode & 0o077:
-            raise ValueError(f"alert writer key {path} must be mode 0600, found {stat.S_IMODE(info.st_mode):04o}")
-        key = os.read(fd, info.st_size + 1)
-    finally:
-        os.close(fd)
-    if len(key) < MIN_KEY_BYTES:
-        raise ValueError(f"alert writer key {path} must be at least {MIN_KEY_BYTES} bytes")
-    return key
+    """Read the alert writer key; see `load_key_file` for what is refused. The key must be 32 bytes or more."""
+    return load_key_file(path, "alert writer key", MIN_KEY_BYTES)
 
 
 def _payload(alert: Alert, writer_id: str) -> bytes:

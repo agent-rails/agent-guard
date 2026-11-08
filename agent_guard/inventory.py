@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
 from agentguard_identity.credentials import IssuanceRecord
 
-from .evidence_log import EvidenceError, EvidenceLog
+from .evidence_log import EvidenceError, EvidenceLog, trust_line
 
 DECISION_EVENTS = (None, "decision", "release")
 LIMIT_TEXT = "only agents whose effects passed a guard or credential injector appear here"
@@ -55,6 +55,8 @@ class Inventory:
     malformed: int
     not_counted: int
     agents: list[AgentEntry]
+    untrusted: int = 0
+    verified: bool = False
     issuance_path: str | None = None
     issuance_rows: int = 0
     issuance_malformed: int = 0
@@ -74,9 +76,14 @@ def _grant_hash(row: dict) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def build_inventory(audit_path: Path, issuance_path: Path | None = None) -> Inventory:
+def build_inventory(
+    audit_path: Path,
+    issuance_path: Path | None = None,
+    secret: bytes | None = None,
+    allow_unsigned: bool = False,
+) -> Inventory:
     try:
-        log = EvidenceLog(audit_path)
+        log = EvidenceLog(audit_path, secret, allow_unsigned)
     except EvidenceError as err:
         raise InventoryError(str(err)) from err
     entries: dict[tuple[str, str | None], AgentEntry] = {}
@@ -101,20 +108,16 @@ def build_inventory(audit_path: Path, issuance_path: Path | None = None) -> Inve
         else:
             entry.grant_hashes.add(grant_hash)
     agents = sorted(entries.values(), key=lambda item: (item.actor, item.tenant_id or ""))
-    result = Inventory(str(audit_path), log.rows_read, log.malformed, not_counted, agents)
+    result = Inventory(str(audit_path), log.rows_read, log.malformed, not_counted, agents, log.untrusted, log.verified)
     if issuance_path is None:
         return result
     tenants, issuance_rows, issuance_malformed = _read_issuance(issuance_path)
-    return Inventory(
-        result.audit_path,
-        result.rows,
-        result.malformed,
-        result.not_counted,
-        agents,
-        str(issuance_path),
-        issuance_rows,
-        issuance_malformed,
-        tenants,
+    return replace(
+        result,
+        issuance_path=str(issuance_path),
+        issuance_rows=issuance_rows,
+        issuance_malformed=issuance_malformed,
+        tenants=tenants,
     )
 
 
@@ -179,6 +182,7 @@ def render_inventory(inventory: Inventory) -> str:
     lines = [
         f"audit: {inventory.audit_path}",
         f"limit: {LIMIT_TEXT}",
+        trust_line(inventory.verified, inventory.untrusted),
         f"rows read: {inventory.rows}",
         f"malformed lines: {inventory.malformed}",
         f"lifecycle rows not counted as decisions (terminal, fault): {inventory.not_counted}",
