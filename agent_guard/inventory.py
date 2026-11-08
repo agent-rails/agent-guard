@@ -8,7 +8,7 @@ from pathlib import Path
 
 from agentguard_identity.credentials import IssuanceRecord
 
-from .report import read_audit
+from .evidence_log import EvidenceError, EvidenceLog
 
 DECISION_EVENTS = (None, "decision", "release")
 LIMIT_TEXT = "only agents whose effects passed a guard or credential injector appear here"
@@ -69,38 +69,25 @@ def _text(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _utc(stamp: str) -> datetime:
-    return datetime.fromisoformat(stamp).astimezone(timezone.utc)
-
-
-def row_identity(row: dict) -> tuple[str, str | None] | None:
-    actor = _text(row.get("actor")) or _text(row.get("agent_id"))
-    tenant = row.get("tenant_id")
-    if actor is None or not isinstance(row.get("tool"), str) or (tenant is not None and not _text(tenant)):
-        return None
-    return actor, tenant
-
-
 def _grant_hash(row: dict) -> str | None:
     value = row.get("grant_hash")
     return value if isinstance(value, str) and value else None
 
 
 def build_inventory(audit_path: Path, issuance_path: Path | None = None) -> Inventory:
-    if not audit_path.exists():
-        raise InventoryError(f"audit file {audit_path} does not exist")
-    rows, malformed = read_audit(audit_path)
+    try:
+        log = EvidenceLog(audit_path)
+    except EvidenceError as err:
+        raise InventoryError(str(err)) from err
     entries: dict[tuple[str, str | None], AgentEntry] = {}
     not_counted = 0
-    for row in rows:
-        identity = row_identity(row)
-        if identity is None:
-            malformed += 1
-            continue
+    for item in log.rows():
+        row = item.data
+        identity = (item.actor, item.tenant_id)
         if row.get("event") not in DECISION_EVENTS:
             not_counted += 1
             continue
-        seen = _utc(row["ts"])
+        seen = item.ts
         entry = entries.get(identity)
         if entry is None:
             entry = entries[identity] = AgentEntry(identity[0], identity[1], seen, seen)
@@ -114,7 +101,7 @@ def build_inventory(audit_path: Path, issuance_path: Path | None = None) -> Inve
         else:
             entry.grant_hashes.add(grant_hash)
     agents = sorted(entries.values(), key=lambda item: (item.actor, item.tenant_id or ""))
-    result = Inventory(str(audit_path), len(rows), malformed, not_counted, agents)
+    result = Inventory(str(audit_path), log.rows_read, log.malformed, not_counted, agents)
     if issuance_path is None:
         return result
     tenants, issuance_rows, issuance_malformed = _read_issuance(issuance_path)
@@ -131,12 +118,25 @@ def build_inventory(audit_path: Path, issuance_path: Path | None = None) -> Inve
     )
 
 
-def _valid_issuance(row: object) -> bool:
+def _epoch(value: object) -> datetime | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        return datetime.fromtimestamp(value, timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _valid_issuance(row: object) -> datetime | None:
+    """The issue time of a well-formed issuance row, or None when the row is malformed."""
     if not isinstance(row, dict) or set(row) != ISSUANCE_FIELDS:
-        return False
+        return None
     if not all(_text(row[name]) for name in ISSUANCE_STRINGS):
-        return False
-    return all(isinstance(row[name], (int, float)) and not isinstance(row[name], bool) for name in ISSUANCE_TIMES)
+        return None
+    issued = _epoch(row["issued_at"])
+    if issued is None or _epoch(row["expires_at"]) is None:
+        return None
+    return issued
 
 
 def _read_issuance(path: Path) -> tuple[list[TenantIssuance], int, int]:
@@ -144,25 +144,26 @@ def _read_issuance(path: Path) -> tuple[list[TenantIssuance], int, int]:
         raise InventoryError(f"issuance file {path} does not exist")
     tenants: dict[str, TenantIssuance] = {}
     rows = malformed = 0
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            row = json.loads(line)
-        except ValueError:
-            malformed += 1
-            continue
-        if not _valid_issuance(row):
-            malformed += 1
-            continue
-        rows += 1
-        issued = datetime.fromtimestamp(row["issued_at"], timezone.utc)
-        entry = tenants.setdefault(row["tenant_id"], TenantIssuance(row["tenant_id"]))
-        entry.issuances += 1
-        entry.tools.add(row["tool"])
-        entry.task_ids.add(row["task_id"])
-        entry.first_issued = issued if entry.first_issued is None else min(entry.first_issued, issued)
-        entry.last_issued = issued if entry.last_issued is None else max(entry.last_issued, issued)
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except (ValueError, RecursionError):
+                malformed += 1
+                continue
+            issued = _valid_issuance(row)
+            if issued is None:
+                malformed += 1
+                continue
+            rows += 1
+            entry = tenants.setdefault(row["tenant_id"], TenantIssuance(row["tenant_id"]))
+            entry.issuances += 1
+            entry.tools.add(row["tool"])
+            entry.task_ids.add(row["task_id"])
+            entry.first_issued = issued if entry.first_issued is None else min(entry.first_issued, issued)
+            entry.last_issued = issued if entry.last_issued is None else max(entry.last_issued, issued)
     return sorted(tenants.values(), key=lambda item: item.tenant_id), rows, malformed
 
 
