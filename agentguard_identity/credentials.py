@@ -3,12 +3,15 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
+import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
 INJECTABLE_STATES = frozenset({"reserved", "issued"})
+SUSPEND_FILE = "suspended.json"
 
 
 class OperationLike(Protocol):
@@ -134,6 +137,13 @@ class CredentialInjector:
     the op_id stays consumed and an operator reconciles it.
 
     `secret_names` maps a tool to the name of the secret in `store`; an unmapped tool is refused.
+
+    Suspension is persisted in `state_dir`, which must be owned by the broker and unwritable by the agent; code
+    running as the same OS user can delete or roll back the state, so isolation depends on the deployment mode.
+    Only the configured `releaser` can resume. Anything present at the state path, including corrupt, unreadable
+    or symlinked state, counts as suspended.
+
+    A suspension stops new injections only; credentials already issued live until their ttl.
     `inject` returns a `Refusal` for every refused case and does not raise for them."""
 
     def __init__(
@@ -146,11 +156,15 @@ class CredentialInjector:
         audience: str,
         max_ttl: float,
         clock: Callable[[], float],
+        state_dir: str | Path,
+        releaser: str,
     ) -> None:
         if not executor_key_id or not audience:
             raise ValueError("executor_key_id and audience are required")
         if max_ttl <= 0:
             raise ValueError("max_ttl must be positive")
+        if not releaser:
+            raise ValueError("releaser is required")
         self._store = store
         self._minter = minter
         self._issuance = issuance
@@ -159,14 +173,53 @@ class CredentialInjector:
         self._audience = audience
         self._max_ttl = max_ttl
         self._clock = clock
-        self._suspended_reason: str | None = None
+        self._releaser = releaser
+        self._state_dir = Path(state_dir)
+        self._state_path = self._state_dir / SUSPEND_FILE
+        self._prepare_state_dir()
+
+    def _prepare_state_dir(self) -> None:
+        self._state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        mode = os.lstat(self._state_dir).st_mode
+        if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+            raise ValueError(f"state_dir must be a real directory, not a symlink: {self._state_dir}")
 
     @property
     def suspended(self) -> bool:
-        return self._suspended_reason is not None
+        try:
+            os.lstat(self._state_path)
+        except FileNotFoundError:
+            return False
+        except OSError:
+            return True
+        return True
 
     def suspend(self, reason: str, actor: str) -> None:
-        self._suspended_reason = f"{actor}: {reason}"
+        """Persist a suspension. An existing suspension is kept as first written."""
+        self._prepare_state_dir()
+        try:
+            mode = os.lstat(self._state_path).st_mode
+        except FileNotFoundError:
+            pass
+        else:
+            if stat.S_ISLNK(mode):
+                raise ValueError(f"suspend state path is a symlink: {self._state_path}")
+            return
+        fd, tmp = tempfile.mkstemp(dir=self._state_dir, prefix=".suspend-")
+        try:
+            os.write(fd, json.dumps({"suspended": True, "reason": reason, "actor": actor}).encode("utf-8"))
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(tmp, self._state_path)
+
+    def resume(self, releaser: str) -> None:
+        if releaser != self._releaser:
+            raise PermissionError(f"{releaser!r} is not the configured releaser")
+        try:
+            os.unlink(self._state_path)
+        except FileNotFoundError:
+            pass
 
     def inject(self, operation: OperationLike, reservation: ReservationLike) -> InjectedCredential | Refusal:
         if self.suspended:
