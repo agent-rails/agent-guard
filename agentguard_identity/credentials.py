@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
+import math
 import os
 import stat
 import tempfile
+import threading
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -47,6 +50,10 @@ class DuplicateIssuance(Exception):
     pass
 
 
+class IssuanceStoreCorrupt(Exception):
+    pass
+
+
 @dataclass(frozen=True)
 class IssuanceRecord:
     """Ids and hashes only. Never a secret and never the minted credential."""
@@ -67,7 +74,8 @@ class IssuanceStore(Protocol):
     def lookup(self, op_id: str) -> IssuanceRecord | None: ...
 
     def append(self, record: IssuanceRecord) -> None:
-        """Durably record the issuance. Raise DuplicateIssuance if the op_id is already recorded; any other
+        """Atomically claim the op_id and durably record the issuance: of any number of concurrent callers for
+        one op_id exactly one succeeds. Raise DuplicateIssuance if the op_id is already recorded; any other
         failure to write must also raise."""
         ...
 
@@ -75,41 +83,54 @@ class IssuanceStore(Protocol):
 class MemoryIssuanceStore:
     def __init__(self) -> None:
         self.records: dict[str, IssuanceRecord] = {}
+        self._lock = threading.Lock()
 
     def lookup(self, op_id: str) -> IssuanceRecord | None:
         return self.records.get(op_id)
 
     def append(self, record: IssuanceRecord) -> None:
-        if record.op_id in self.records:
-            raise DuplicateIssuance(record.op_id)
-        self.records[record.op_id] = record
+        with self._lock:
+            if record.op_id in self.records:
+                raise DuplicateIssuance(record.op_id)
+            self.records[record.op_id] = record
 
 
 class JsonlIssuanceStore:
-    """Append-only JSONL issuance log, fsynced per record. Single-writer: duplicate detection is check-then-append."""
+    """Append-only JSONL issuance log, fsynced per record. Check-and-append runs under an exclusive flock on a
+    sidecar lock file, so concurrent threads and processes on one host claim an op_id exactly once. A line that
+    cannot be parsed raises IssuanceStoreCorrupt."""
 
     def __init__(self, path: str | Path) -> None:
         self._path = Path(path)
+        self._lock_path = self._path.with_name(self._path.name + ".lock")
 
     def lookup(self, op_id: str) -> IssuanceRecord | None:
         if not self._path.exists():
             return None
         with self._path.open(encoding="utf-8") as handle:
             for line in handle:
-                row = json.loads(line)
-                if row["op_id"] == op_id:
-                    return IssuanceRecord(**row)
+                try:
+                    row = json.loads(line)
+                    if row["op_id"] == op_id:
+                        return IssuanceRecord(**row)
+                except (ValueError, KeyError, TypeError) as err:
+                    raise IssuanceStoreCorrupt(f"unreadable issuance line in {self._path}") from err
         return None
 
     def append(self, record: IssuanceRecord) -> None:
-        if self.lookup(record.op_id) is not None:
-            raise DuplicateIssuance(record.op_id)
-        fd = os.open(self._path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        lock_fd = os.open(self._lock_path, os.O_WRONLY | os.O_CREAT, 0o600)
         try:
-            os.write(fd, (json.dumps(asdict(record), sort_keys=True) + "\n").encode("utf-8"))
-            os.fsync(fd)
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            if self.lookup(record.op_id) is not None:
+                raise DuplicateIssuance(record.op_id)
+            fd = os.open(self._path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+            try:
+                os.write(fd, (json.dumps(asdict(record), sort_keys=True) + "\n").encode("utf-8"))
+                os.fsync(fd)
+            finally:
+                os.close(fd)
         finally:
-            os.close(fd)
+            os.close(lock_fd)
 
 
 @dataclass(frozen=True)
@@ -144,6 +165,12 @@ class CredentialInjector:
     or symlinked state, counts as suspended.
 
     A suspension stops new injections only; credentials already issued live until their ttl.
+    Trust boundary: `verdict_allowed` and the reservation are trusted inputs. The injector checks that they agree
+    with the operation; it does not authenticate them, so only the broker may build them.
+
+    Not defended: replacing or renaming `state_dir` through write access to its parent lifts a suspension. That
+    needs same-user compromise; enforced mode runs the broker as a separate OS user.
+
     `inject` returns a `Refusal` for every refused case and does not raise for them."""
 
     def __init__(
@@ -161,8 +188,8 @@ class CredentialInjector:
     ) -> None:
         if not executor_key_id or not audience:
             raise ValueError("executor_key_id and audience are required")
-        if max_ttl <= 0:
-            raise ValueError("max_ttl must be positive")
+        if not math.isfinite(max_ttl) or max_ttl <= 0:
+            raise ValueError("max_ttl must be a finite positive number")
         if not releaser:
             raise ValueError("releaser is required")
         self._store = store
@@ -180,12 +207,22 @@ class CredentialInjector:
 
     def _prepare_state_dir(self) -> None:
         self._state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        mode = os.lstat(self._state_dir).st_mode
-        if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
-            raise ValueError(f"state_dir must be a real directory, not a symlink: {self._state_dir}")
+        if not self._state_dir_trusted():
+            raise ValueError(
+                f"state_dir must be a real directory owned by this user with no group/other write: {self._state_dir}"
+            )
+
+    def _state_dir_trusted(self) -> bool:
+        try:
+            info = os.lstat(self._state_dir)
+        except OSError:
+            return False
+        return stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid() and not info.st_mode & 0o022
 
     @property
     def suspended(self) -> bool:
+        if not self._state_dir_trusted():
+            return True
         try:
             os.lstat(self._state_path)
         except FileNotFoundError:
@@ -234,9 +271,16 @@ class CredentialInjector:
         if reservation.state not in INJECTABLE_STATES:
             return Refusal("reservation_state")
         now = self._clock()
+        if not math.isfinite(now):
+            return Refusal("clock_invalid")
+        if not math.isfinite(operation.expires_at):
+            return Refusal("expiry_invalid")
         if now >= operation.expires_at:
             return Refusal("operation_expired")
-        existing = self._issuance.lookup(operation.op_id)
+        try:
+            existing = self._issuance.lookup(operation.op_id)
+        except IssuanceStoreCorrupt:
+            return Refusal("issuance_store_corrupt")
         if existing is not None:
             return Refusal("already_issued", existing.issuance_id)
         secret_name = self._secret_names.get(operation.tool)
@@ -247,8 +291,12 @@ class CredentialInjector:
         except KeyError:
             return Refusal("secret_missing")
         ttl = min(self._max_ttl, operation.expires_at - now)
+        if not math.isfinite(ttl) or ttl <= 0:
+            return Refusal("ttl_invalid")
         record = IssuanceRecord(
-            issuance_id=hashlib.sha256(f"{operation.op_id}:{request_digest}".encode()).hexdigest()[:32],
+            issuance_id=hashlib.sha256(
+                f"{operation.tenant_id}:{operation.op_id}:{request_digest}".encode()
+            ).hexdigest()[:32],
             op_id=operation.op_id,
             tenant_id=operation.tenant_id,
             task_id=operation.task_id,
@@ -259,10 +307,14 @@ class CredentialInjector:
             issued_at=now,
             expires_at=now + ttl,
         )
+        if self.suspended:
+            return Refusal("suspended")
         try:
             self._issuance.append(record)
         except DuplicateIssuance:
             return Refusal("already_issued", record.issuance_id)
+        except IssuanceStoreCorrupt:
+            return Refusal("issuance_store_corrupt")
         except Exception:
             return Refusal("issuance_unwritable")
         try:

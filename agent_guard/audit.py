@@ -174,8 +174,20 @@ def sign_record(record: AuditRecord, secret: bytes) -> str:
     return base64.urlsafe_b64encode(mac).decode()
 
 
+def _schema_consistent(record: AuditRecord) -> bool:
+    version = record.schema_version
+    has_evidence = any(getattr(record, name) is not None for name in V2_EVIDENCE_FIELDS)
+    if version is None:
+        return not has_evidence
+    if isinstance(version, bool) or not isinstance(version, int):
+        return False
+    return version == 2 if has_evidence else version == 1
+
+
 def verify_record(record: AuditRecord, secret: bytes) -> bool:
-    if record.sig is None:
+    """True only for a record with a valid signature and a schema_version that is absent, 1 or 2 and agrees with
+    whether any v2 evidence field is present."""
+    if record.sig is None or not _schema_consistent(record):
         return False
     try:
         provided = base64.urlsafe_b64decode(record.sig)

@@ -61,6 +61,7 @@ Consequences, each covered by tests in `tests/test_audit_v2.py`:
 - A record with no optional fields signs to the same bytes it signed to before the lifecycle and v2 fields existed. `sig` and `error` stay in the body as `null` when unset.
 - Setting any v2 field, `purpose` or `schema_version` changes the signed bytes, so a signature made without the field no longer verifies once the field is added, and removing a signed field also fails verification.
 - The signed bytes change only through a field being set. `schema_version` is signed whenever present, so changing it invalidates the signature.
+- `verify_record` also returns false when `schema_version` is not an integer, is not 1 or 2, or disagrees with the record: absent with any v2 field present, 1 with a v2 field present, or 2 with none.
 
 Limits. The HMAC key is shared by signer and verifier: a compromised producer can sign forged records, and signing does not show that a record was never suppressed. Replay of a whole signed record is not detected; there is no sequence number or hash chain.
 
@@ -87,7 +88,7 @@ Implementation status in this repository: `AuditRecord` and `build_record` accep
 ## Mixed versions
 
 - Writers omit unset v2 fields, so a v1 stream and a v2 stream can share one file.
-- This version verifies both: v1 records verify under their original bytes, v2 records under the bytes above.
+- This version verifies both: v1 records verify under their original bytes, v2 records under the bytes above. An explicit `schema_version` of 1 is accepted only when no v2 field is set.
 - A reader that rebuilds records with `AuditRecord(**row)` from an older release rejects rows that carry fields it does not know. Readers in this repository (`guard report`, `guard replay`, `guard inventory`, `guard detect`) read rows as dictionaries and ignore fields they do not use.
 - `guard inventory` and `guard detect` skip `terminal` and `fault` rows when counting decisions, and treat rows with a missing or non-string identity as malformed and count them.
 - The audit schema has no delegation depth field. `guard detect` reports its depth check as skipped.
