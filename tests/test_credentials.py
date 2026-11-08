@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from dataclasses import dataclass, replace
 
 import pytest
@@ -77,6 +79,7 @@ class UnwritableStore(MemoryIssuanceStore):
 
 
 def _injector(minter=None, issuance=None, secrets=None, now=NOW, **overrides) -> CredentialInjector:
+    state_dir = overrides.pop("state_dir", None) or tempfile.mkdtemp()
     issuance = issuance if issuance is not None else MemoryIssuanceStore()
     kwargs = {
         "store": FakeStore({"deploy-key": SECRET} if secrets is None else secrets),
@@ -87,6 +90,8 @@ def _injector(minter=None, issuance=None, secrets=None, now=NOW, **overrides) ->
         "audience": "deploy-api",
         "max_ttl": 30,
         "clock": lambda: now,
+        "state_dir": state_dir,
+        "releaser": "oncall",
     }
     kwargs.update(overrides)
     return CredentialInjector(**kwargs)
@@ -297,3 +302,115 @@ def test_jsonl_store_unwritable_path_refuses_injection(tmp_path):
     injector = _injector(minter=minter, issuance=JsonlIssuanceStore(tmp_path / "missing-dir" / "issuance.jsonl"))
     assert injector.inject(operation, _reservation(operation)) == Refusal("issuance_unwritable")
     assert minter.calls == []
+
+
+def _suspendable(tmp_path, **overrides) -> CredentialInjector:
+    return _injector(state_dir=tmp_path / "broker-state", **overrides)
+
+
+def test_suspend_persists_across_a_new_injector_instance(tmp_path):
+    operation = FakeOperation()
+    _suspendable(tmp_path).suspend("incident", "detector")
+    minter = RecordingMinter()
+    fresh = _suspendable(tmp_path, minter=minter)
+    assert fresh.suspended
+    assert fresh.inject(operation, _reservation(operation)) == Refusal("suspended")
+    assert minter.calls == []
+
+
+def test_state_dir_and_file_are_private(tmp_path):
+    _suspendable(tmp_path).suspend("incident", "detector")
+    state_dir = tmp_path / "broker-state"
+    assert oct(state_dir.stat().st_mode & 0o777) == "0o700"
+    assert oct((state_dir / "suspended.json").stat().st_mode & 0o777) == "0o600"
+    assert json.loads((state_dir / "suspended.json").read_text()) == {
+        "suspended": True,
+        "reason": "incident",
+        "actor": "detector",
+    }
+
+
+def test_not_suspended_when_no_state_exists(tmp_path):
+    assert not _suspendable(tmp_path).suspended
+
+
+def test_first_suspension_is_kept(tmp_path):
+    injector = _suspendable(tmp_path)
+    injector.suspend("first", "alice")
+    injector.suspend("second", "bob")
+    assert json.loads((tmp_path / "broker-state" / "suspended.json").read_text())["actor"] == "alice"
+
+
+def test_only_the_named_releaser_can_resume(tmp_path):
+    injector = _suspendable(tmp_path)
+    injector.suspend("incident", "detector")
+    for impostor in ("detector", "agent", ""):
+        with pytest.raises(PermissionError):
+            injector.resume(impostor)
+        assert injector.suspended
+    injector.resume("oncall")
+    assert not injector.suspended
+    assert not _suspendable(tmp_path).suspended
+
+
+def test_resume_without_suspension_is_a_no_op(tmp_path):
+    injector = _suspendable(tmp_path)
+    injector.resume("oncall")
+    assert not injector.suspended
+
+
+@pytest.mark.parametrize("content", [b"", b"{not json", b"\xff\xfe", b"[]", b'{"suspended": false}'])
+def test_corrupt_state_file_is_treated_as_suspended(tmp_path, content):
+    _suspendable(tmp_path)
+    (tmp_path / "broker-state" / "suspended.json").write_bytes(content)
+    operation = FakeOperation()
+    injector = _suspendable(tmp_path)
+    assert injector.suspended
+    assert injector.inject(operation, _reservation(operation)) == Refusal("suspended")
+
+
+def test_unreadable_state_is_treated_as_suspended(tmp_path):
+    injector = _suspendable(tmp_path)
+    injector.suspend("incident", "detector")
+    state_dir = tmp_path / "broker-state"
+    state_dir.chmod(0)
+    try:
+        if os.access(state_dir, os.X_OK):
+            pytest.skip("permissions not enforced for this user")
+        assert injector.suspended
+    finally:
+        state_dir.chmod(0o700)
+
+
+def test_corrupt_state_is_cleared_only_by_the_releaser(tmp_path):
+    injector = _suspendable(tmp_path)
+    (tmp_path / "broker-state" / "suspended.json").write_bytes(b"garbage")
+    with pytest.raises(PermissionError):
+        injector.resume("agent")
+    assert injector.suspended
+    injector.resume("oncall")
+    assert not injector.suspended
+
+
+def test_symlinked_state_dir_is_refused(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    (tmp_path / "link").symlink_to(real)
+    with pytest.raises(ValueError):
+        _injector(state_dir=tmp_path / "link")
+
+
+def test_symlinked_state_file_is_refused_and_counts_as_suspended(tmp_path):
+    injector = _suspendable(tmp_path)
+    target = tmp_path / "elsewhere"
+    target.write_text("untouched")
+    (tmp_path / "broker-state" / "suspended.json").symlink_to(target)
+    assert injector.suspended
+    with pytest.raises(ValueError):
+        injector.suspend("incident", "detector")
+    assert target.read_text() == "untouched"
+
+
+def test_releaser_is_required():
+    with pytest.raises(ValueError):
+        _injector(releaser="")
