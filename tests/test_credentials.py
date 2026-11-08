@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
+import threading
 from dataclasses import dataclass, replace
 
 import pytest
@@ -12,6 +14,7 @@ from agentguard_identity.credentials import (
     DuplicateIssuance,
     InjectedCredential,
     IssuanceRecord,
+    IssuanceStoreCorrupt,
     JsonlIssuanceStore,
     MemoryIssuanceStore,
     Refusal,
@@ -414,3 +417,130 @@ def test_symlinked_state_file_is_refused_and_counts_as_suspended(tmp_path):
 def test_releaser_is_required():
     with pytest.raises(ValueError):
         _injector(releaser="")
+
+
+def _race(store_factory, tmp_path):
+    operation = FakeOperation()
+    barrier = threading.Barrier(2)
+    seen = threading.local()
+    base = store_factory(tmp_path)
+
+    class Racing(type(base)):
+        def lookup(self, op_id):
+            result = super().lookup(op_id)
+            if not getattr(seen, "waited", False):
+                seen.waited = True
+                barrier.wait(timeout=5)
+            return result
+
+    store = Racing(tmp_path / "issuance.jsonl") if isinstance(base, JsonlIssuanceStore) else Racing()
+    minter = RecordingMinter()
+    injector = _injector(minter=minter, issuance=store)
+    results: list = []
+    threads = [
+        threading.Thread(target=lambda: results.append(injector.inject(operation, _reservation(operation))))
+        for _ in range(2)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+    return results, minter
+
+
+@pytest.mark.parametrize(
+    "factory", [lambda p: MemoryIssuanceStore(), lambda p: JsonlIssuanceStore(p / "issuance.jsonl")]
+)
+def test_concurrent_inject_of_same_op_id_mints_exactly_once(factory, tmp_path):
+    results, minter = _race(factory, tmp_path)
+    assert len(minter.calls) == 1
+    assert sum(isinstance(r, InjectedCredential) for r in results) == 1
+    assert sum(isinstance(r, Refusal) and r.reason == "already_issued" for r in results) == 1
+
+
+@pytest.mark.parametrize("mode", [0o777, 0o770, 0o772, 0o707])
+def test_existing_state_dir_with_group_or_other_write_is_refused(tmp_path, mode):
+    state_dir = tmp_path / "shared"
+    state_dir.mkdir()
+    state_dir.chmod(mode)
+    with pytest.raises(ValueError):
+        _injector(state_dir=state_dir)
+
+
+def test_state_dir_owned_by_another_user_is_refused(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(mode=0o700)
+    monkeypatch.setattr(os, "geteuid", lambda: os.stat(state_dir).st_uid + 1)
+    with pytest.raises(ValueError):
+        _injector(state_dir=state_dir)
+
+
+def test_state_dir_made_writable_after_construction_counts_as_suspended(tmp_path):
+    injector = _suspendable(tmp_path)
+    (tmp_path / "broker-state").chmod(0o777)
+    operation = FakeOperation()
+    assert injector.suspended
+    assert injector.inject(operation, _reservation(operation)) == Refusal("suspended")
+    with pytest.raises(ValueError):
+        injector.suspend("incident", "detector")
+
+
+def test_suspend_landing_during_inject_prevents_the_mint(tmp_path):
+    injector_box: list = []
+
+    class SuspendingOperation(FakeOperation):
+        def digest(self):
+            injector_box[0].suspend("incident", "detector")
+            return super().digest()
+
+    operation = SuspendingOperation()
+    minter = RecordingMinter()
+    injector = _suspendable(tmp_path, minter=minter)
+    injector_box.append(injector)
+    result = injector.inject(operation, FakeReservation(op_id="op-1", digest=FakeOperation().digest()))
+    assert result == Refusal("suspended")
+    assert minter.calls == []
+    assert injector._issuance.lookup("op-1") is None
+
+
+@pytest.mark.parametrize("ttl", [math.nan, math.inf, -math.inf, 0, -1])
+def test_constructor_rejects_non_finite_or_non_positive_max_ttl(ttl):
+    with pytest.raises(ValueError):
+        _injector(max_ttl=ttl)
+
+
+@pytest.mark.parametrize("now", [math.nan, math.inf, -math.inf])
+def test_non_finite_clock_refuses(now):
+    operation = FakeOperation()
+    minter = RecordingMinter()
+    result = _injector(minter=minter, now=now).inject(operation, _reservation(operation))
+    assert result == Refusal("clock_invalid")
+    assert minter.calls == []
+
+
+@pytest.mark.parametrize("expires_at", [math.nan, math.inf])
+def test_non_finite_operation_expiry_refuses(expires_at):
+    operation = FakeOperation(expires_at=expires_at)
+    minter = RecordingMinter()
+    assert _injector(minter=minter).inject(operation, _reservation(operation)) == Refusal("expiry_invalid")
+    assert minter.calls == []
+
+
+def test_issuance_id_depends_on_tenant():
+    ids = []
+    for tenant in ("tenant-a", "tenant-b"):
+        operation = FakeOperation(tenant_id=tenant)
+        ids.append(_injector().inject(operation, _reservation(operation)).issuance_id)
+    assert ids[0] != ids[1]
+
+
+def test_corrupt_issuance_log_refuses_instead_of_raising(tmp_path):
+    path = tmp_path / "issuance.jsonl"
+    path.write_text("{bad\n")
+    operation = FakeOperation()
+    minter = RecordingMinter()
+    result = _injector(minter=minter, issuance=JsonlIssuanceStore(path)).inject(operation, _reservation(operation))
+    assert result == Refusal("issuance_store_corrupt")
+    assert minter.calls == []
+    with pytest.raises(IssuanceStoreCorrupt):
+        JsonlIssuanceStore(path).lookup("op-1")
