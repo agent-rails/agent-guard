@@ -9,7 +9,7 @@ import sys
 from dataclasses import asdict
 
 from agent_guard import AuditRecord, Guard, MemoryAuditSink, Policy, SigningAuditSink, unresolved_releases
-from agent_guard.audit import verify_record
+from agent_guard.audit import V2_EVIDENCE_FIELDS, verify_record
 
 SECRET = b"lifecycle-test-secret"
 
@@ -76,7 +76,7 @@ def test_legacy_record_signature_shape_remains_unchanged():
 
     record = build_record("agent-1", "shell", {"cmd": "echo ok"}, Verdict(Decision.ALLOW, "default"), False)
     legacy_fields = asdict(record)
-    for field in ("event", "call_id", "call_digest", "outcome"):
+    for field in ("event", "call_id", "call_digest", "outcome", *V2_EVIDENCE_FIELDS, "schema_version"):
         legacy_fields.pop(field)
     legacy_body = json.dumps(legacy_fields, sort_keys=True, separators=(",", ":")).encode("utf-8")
     legacy_sig = base64.urlsafe_b64encode(hmac.new(SECRET, legacy_body, hashlib.sha256).digest()).decode()
