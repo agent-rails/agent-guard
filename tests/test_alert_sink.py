@@ -340,3 +340,10 @@ def test_suspend_reason_escapes_control_characters(tmp_path):
     sink.handle(_sign(hostile))
     state = (tmp_path / "broker-state" / "suspended.json").read_text()
     assert "\\x1b" in state and "\\x07" in state
+
+
+def test_load_writer_key_refuses_fifo_without_blocking(tmp_path):
+    fifo = tmp_path / "writer.key"
+    os.mkfifo(fifo, 0o600)
+    with pytest.raises(ValueError, match="regular file"):
+        load_writer_key(fifo)

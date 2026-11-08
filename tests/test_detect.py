@@ -484,3 +484,31 @@ def test_resources_differing_only_in_query_are_the_same_resource(audit):
     _write(audit, "2026-11-01T05:00:00+00:00", args={"resource": "svc/api?a=1"})
     _write(audit, "2026-11-02T03:00:00+00:00", args={"resource": "svc/api?a=2"})
     assert _detect(audit, DetectConfig(evaluate_from=EVALUATE_FROM)).alerts == []
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), 0.0, -1.0])
+def test_non_finite_or_non_positive_rate_multiplier_refused(value):
+    with pytest.raises(DetectError):
+        DetectConfig(evaluate_from=EVALUATE_FROM, rate_multiplier=value)
+
+
+def test_inverted_windows_refused():
+    with pytest.raises(DetectError, match="baseline_from"):
+        DetectConfig(evaluate_from=EVALUATE_FROM, baseline_from=EVALUATE_FROM)
+    with pytest.raises(DetectError, match="evaluate_until"):
+        DetectConfig(evaluate_from=EVALUATE_FROM, evaluate_until=EVALUATE_FROM)
+
+
+def test_cli_rejects_inverted_window(audit, capsys):
+    args = [
+        "detect",
+        "--audit",
+        str(audit),
+        "--allow-unsigned",
+        "--evaluate-from",
+        "2026-11-02T00:00:00+00:00",
+        "--evaluate-until",
+        "2026-11-01T00:00:00+00:00",
+    ]
+    assert main(args) == 1
+    assert "evaluate_until" in capsys.readouterr().err
