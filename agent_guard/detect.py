@@ -55,6 +55,7 @@ class Alert:
     ts: str
     detail: str
     count: int = 1
+    task_roots: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -98,6 +99,12 @@ def _resource(row: dict) -> str | None:
     args = row.get("args")
     value = args.get("resource") if isinstance(args, dict) else None
     return value if isinstance(value, str) and value else None
+
+
+def _task_roots(rows: list[dict]) -> tuple[str, ...]:
+    return tuple(
+        sorted({row["task_root"] for row in rows if isinstance(row.get("task_root"), str) and row["task_root"]})
+    )
 
 
 def _hour_bucket(stamp: datetime) -> datetime:
@@ -149,14 +156,39 @@ def _first_use(baseline: list, evaluated: list) -> list[Alert]:
     for stamp, persona, row in evaluated:
         if row["tool"] not in known_tools[persona]:
             known_tools[persona].add(row["tool"])
-            alerts.append(Alert(FIRST_TOOL_USE, persona[0], persona[1], stamp.isoformat(), f"tool {row['tool']!r}"))
+            alerts.append(
+                Alert(
+                    FIRST_TOOL_USE,
+                    persona[0],
+                    persona[1],
+                    stamp.isoformat(),
+                    f"tool {row['tool']!r}",
+                    task_roots=_task_roots([row]),
+                )
+            )
         resource = _resource(row)
         if resource is not None and resource not in known_resources[persona]:
             known_resources[persona].add(resource)
             alerts.append(
-                Alert(FIRST_RESOURCE_USE, persona[0], persona[1], stamp.isoformat(), f"resource {resource!r}")
+                Alert(
+                    FIRST_RESOURCE_USE,
+                    persona[0],
+                    persona[1],
+                    stamp.isoformat(),
+                    f"resource {resource!r}",
+                    task_roots=_task_roots([row]),
+                )
             )
     return alerts
+
+
+def _hourly(evaluated: list, keep=lambda stamp: True) -> list[tuple[Persona, datetime, list[dict]]]:
+    grouped: dict[tuple[Persona, datetime], list[dict]] = defaultdict(list)
+    for stamp, persona, row in evaluated:
+        if keep(stamp):
+            grouped[(persona, _hour_bucket(stamp))].append(row)
+    ordered = sorted(grouped.items(), key=lambda item: (item[0][1], item[0][0][0], item[0][0][1] or ""))
+    return [(persona, bucket, rows) for (persona, bucket), rows in ordered]
 
 
 def _rate(baseline: list, evaluated: list, config: DetectConfig, start: datetime, boundary: datetime) -> list[Alert]:
@@ -164,9 +196,9 @@ def _rate(baseline: list, evaluated: list, config: DetectConfig, start: datetime
     if baseline_hours <= 0:
         return []
     baseline_counts = Counter(persona for _stamp, persona, _row in baseline)
-    buckets: Counter = Counter((persona, _hour_bucket(stamp)) for stamp, persona, _row in evaluated)
     alerts: list[Alert] = []
-    for (persona, bucket), count in sorted(buckets.items(), key=lambda item: (item[0][1], item[0][0][0])):
+    for persona, bucket, rows in _hourly(evaluated):
+        count = len(rows)
         if persona not in baseline_counts or count < config.min_rate_events:
             continue
         baseline_rate = baseline_counts[persona] / baseline_hours
@@ -174,27 +206,26 @@ def _rate(baseline: list, evaluated: list, config: DetectConfig, start: datetime
             detail = (
                 f"{count} events in the hour vs baseline {baseline_rate:.2f}/hour (limit {config.rate_multiplier}x)"
             )
-            alerts.append(Alert(RATE_ABOVE_BASELINE, persona[0], persona[1], bucket.isoformat(), detail, count))
+            alerts.append(
+                Alert(RATE_ABOVE_BASELINE, persona[0], persona[1], bucket.isoformat(), detail, count, _task_roots(rows))
+            )
     return alerts
 
 
 def _off_hours(evaluated: list, config: DetectConfig) -> list[Alert]:
     if config.usual_hours is None:
         return []
-    buckets: Counter = Counter()
-    for stamp, persona, _row in evaluated:
-        if stamp.hour not in config.usual_hours:
-            buckets[(persona, _hour_bucket(stamp))] += 1
     return [
         Alert(
             OUTSIDE_USUAL_HOURS,
             persona[0],
             persona[1],
             bucket.isoformat(),
-            f"{count} events at UTC hour {bucket.hour}",
-            count,
+            f"{len(rows)} events at UTC hour {bucket.hour}",
+            len(rows),
+            _task_roots(rows),
         )
-        for (persona, bucket), count in sorted(buckets.items(), key=lambda item: (item[0][1], item[0][0][0]))
+        for persona, bucket, rows in _hourly(evaluated, lambda stamp: stamp.hour not in config.usual_hours)
     ]
 
 

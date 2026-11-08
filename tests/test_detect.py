@@ -238,3 +238,15 @@ def test_cli_usual_hours_option(audit, capsys):
 def test_guard_does_not_import_detect():
     code = "import sys, agent_guard.guard; sys.exit(1 if 'agent_guard.detect' in sys.modules else 0)"
     assert subprocess.run([sys.executable, "-I", "-c", code], check=False).returncode == 0
+
+
+def test_alerts_carry_task_roots_from_evidence(audit):
+    for minute in range(6):
+        _write(
+            audit, f"2026-11-02T05:{minute:02d}:00+00:00", task_root=f"root-{minute % 2}", args={"resource": "svc/api"}
+        )
+    _write(audit, "2026-11-02T07:00:00+00:00", task_root="root-9", tool="delete_prod", args={"resource": "svc/api"})
+    result = detect_file(audit, DetectConfig(evaluate_from=EVALUATE_FROM))
+    by_kind = {alert.kind: alert for alert in result.alerts}
+    assert by_kind[RATE_ABOVE_BASELINE].task_roots == ("root-0", "root-1")
+    assert by_kind[FIRST_TOOL_USE].task_roots == ("root-9",)
