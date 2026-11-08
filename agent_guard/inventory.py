@@ -9,6 +9,7 @@ from pathlib import Path
 from agentguard_identity.credentials import IssuanceRecord
 
 from .evidence_log import EvidenceError, EvidenceLog, trust_line
+from .report import _printable
 
 DECISION_EVENTS = (None, "decision", "release")
 LIMIT_TEXT = "only agents whose effects passed a guard or credential injector appear here"
@@ -175,12 +176,12 @@ def _stamp(value: datetime | None) -> str:
 
 
 def _joined(values: set[str]) -> str:
-    return ", ".join(sorted(values)) if values else "-"
+    return ", ".join(_printable(value) for value in sorted(values)) if values else "-"
 
 
 def render_inventory(inventory: Inventory) -> str:
     lines = [
-        f"audit: {inventory.audit_path}",
+        f"audit: {_printable(inventory.audit_path)}",
         f"limit: {LIMIT_TEXT}",
         trust_line(inventory.verified, inventory.untrusted),
         f"rows read: {inventory.rows}",
@@ -189,9 +190,9 @@ def render_inventory(inventory: Inventory) -> str:
         f"agents ({len(inventory.agents)}):",
     ]
     for agent in inventory.agents:
-        counts = " ".join(f"{name}={count}" for name, count in sorted(agent.decisions.items()))
+        counts = " ".join(f"{_printable(name)}={count}" for name, count in sorted(agent.decisions.items()))
         lines += [
-            f"  actor={agent.actor} tenant={agent.tenant_id or '-'}",
+            f"  actor={_printable(agent.actor)} tenant={_printable(agent.tenant_id or '-')}",
             f"    first seen: {_stamp(agent.first_seen)}",
             f"    last seen: {_stamp(agent.last_seen)}",
             f"    tools: {_joined(agent.tools)}",
@@ -202,14 +203,14 @@ def render_inventory(inventory: Inventory) -> str:
     if inventory.issuance_path is None:
         return "\n".join(lines)
     lines += [
-        f"issuance: {inventory.issuance_path}",
+        f"issuance: {_printable(inventory.issuance_path)}",
         f"issuance rows read: {inventory.issuance_rows}",
         f"issuance malformed lines: {inventory.issuance_malformed}",
         f"tenants with issuances ({len(inventory.tenants)}):",
     ]
     for tenant in inventory.tenants:
         lines += [
-            f"  tenant={tenant.tenant_id} issuances={tenant.issuances}",
+            f"  tenant={_printable(tenant.tenant_id)} issuances={tenant.issuances}",
             f"    first issued: {_stamp(tenant.first_issued)}",
             f"    last issued: {_stamp(tenant.last_issued)}",
             f"    tools: {_joined(tenant.tools)}",
