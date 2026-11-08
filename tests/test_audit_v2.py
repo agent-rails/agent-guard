@@ -17,6 +17,7 @@ V2 = {
     "actor": "agent-a",
     "parent_actor": "agent-root",
     "host": "host-1",
+    "purpose": "deploy-bot",
 }
 
 
@@ -111,3 +112,9 @@ def test_schema_version_must_be_1_or_2_and_match_evidence_fields():
 def test_schema_version_must_agree_with_presence_of_v2_fields():
     assert not verify_record(_signed(_record(schema_version=2)), SECRET)
     assert not verify_record(_signed(_record(trace_id="t", schema_version=1)), SECRET)
+
+
+def test_purpose_is_signed_only_when_set():
+    assert b'"purpose"' not in _signable_body(_record())
+    assert b'"purpose":"deploy-bot"' in _signable_body(_record(purpose="deploy-bot"))
+    assert "purpose" not in record_dict(_record())
