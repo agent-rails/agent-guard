@@ -51,6 +51,43 @@ class AuditRecord:
     call_id: str | None = None
     call_digest: str | None = None
     outcome: str | None = None
+    # Optional v2 evidence fields. Setting any of them stamps schema_version 2; records
+    # without them serialize and sign exactly as before.
+    trace_id: str | None = None
+    task_root: str | None = None
+    grant_hash: str | None = None
+    tenant_id: str | None = None
+    principal: str | None = None
+    actor: str | None = None
+    parent_actor: str | None = None
+    host: str | None = None
+    schema_version: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.schema_version is None and any(getattr(self, name) is not None for name in V2_EVIDENCE_FIELDS):
+            object.__setattr__(self, "schema_version", 2)
+
+
+V2_EVIDENCE_FIELDS = (
+    "trace_id",
+    "task_root",
+    "grant_hash",
+    "tenant_id",
+    "principal",
+    "actor",
+    "parent_actor",
+    "host",
+)
+_OPTIONAL_FIELDS = ("event", "call_id", "call_digest", "outcome", *V2_EVIDENCE_FIELDS, "schema_version")
+
+
+def record_dict(record: AuditRecord) -> dict[str, Any]:
+    """Wire form of a record. Unset v2 fields are omitted so records without them keep their v1 shape."""
+    payload = asdict(record)
+    for field in (*V2_EVIDENCE_FIELDS, "schema_version"):
+        if payload[field] is None:
+            payload.pop(field)
+    return payload
 
 
 class AuditSink(Protocol):
@@ -64,7 +101,7 @@ class JsonlAuditSink:
 
     def write(self, record: AuditRecord) -> None:
         with self._path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(asdict(record)) + "\n")
+            handle.write(json.dumps(record_dict(record)) + "\n")
 
 
 class MemoryAuditSink:
@@ -94,7 +131,7 @@ class WebhookAuditSink:
         self._post = poster or _urllib_post
 
     def write(self, record: AuditRecord) -> None:
-        body = json.dumps(asdict(record)).encode("utf-8")
+        body = json.dumps(record_dict(record)).encode("utf-8")
         self._post(self._url, body, self._headers, self._timeout)
 
 
@@ -124,7 +161,7 @@ class CallableAuditSink:
 
 def _signable_body(record: AuditRecord) -> bytes:
     payload = asdict(replace(record, sig=None))
-    for field in ("event", "call_id", "call_digest", "outcome"):
+    for field in _OPTIONAL_FIELDS:
         if payload[field] is None:
             payload.pop(field)
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -253,6 +290,14 @@ def build_record(
     call_id: str | None = None,
     call_digest: str | None = None,
     outcome: str | None = None,
+    trace_id: str | None = None,
+    task_root: str | None = None,
+    grant_hash: str | None = None,
+    tenant_id: str | None = None,
+    principal: str | None = None,
+    actor: str | None = None,
+    parent_actor: str | None = None,
+    host: str | None = None,
 ) -> AuditRecord:
     return AuditRecord(
         ts=datetime.now(timezone.utc).isoformat(),
@@ -268,6 +313,14 @@ def build_record(
         call_id=call_id,
         call_digest=call_digest,
         outcome=outcome,
+        trace_id=trace_id,
+        task_root=task_root,
+        grant_hash=grant_hash,
+        tenant_id=tenant_id,
+        principal=principal,
+        actor=actor,
+        parent_actor=parent_actor,
+        host=host,
     )
 
 
