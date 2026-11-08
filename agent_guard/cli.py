@@ -23,6 +23,7 @@ from agent_guard import (
     load_policy,
     with_bundled,
 )
+from agent_guard import inventory as audit_inventory
 from agent_guard import replay as audit_replay
 from agent_guard import report as audit_report
 from agent_guard.claude_code import MODES, HookOptions, run_hook
@@ -707,6 +708,18 @@ def _replay(args) -> int:
     return 0
 
 
+def _inventory(args) -> int:
+    audit = Path(args.audit).expanduser().absolute()
+    issuance = Path(args.issuance).expanduser().absolute() if args.issuance else None
+    try:
+        result = audit_inventory.build_inventory(audit, issuance)
+    except audit_inventory.InventoryError as err:
+        print(f"inventory failed: {audit_report._printable(err)}", file=sys.stderr)
+        return 1
+    print(audit_inventory.render_inventory(result))
+    return 4 if audit_inventory.is_incomplete(result) else 0
+
+
 # Starter policy for `guard init`. Dict form is the source of truth; YAML/JSON
 # serializers derive from it so an installed wheel works without package data.
 _STARTER_POLICY: dict = {
@@ -1019,6 +1032,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="exit 0 instead of 4 when rows are not diffed, unreadable, skipped or faults",
     )
     replay.set_defaults(func=_replay)
+
+    inventory = sub.add_parser(
+        "inventory",
+        help="list agents seen in an audit log by actor and tenant (no execution, no writes)",
+        description=(
+            "Groups the audit JSONL by actor (agent_id when no actor is stamped) and tenant_id: first and last "
+            "seen in UTC, tools used, grant_hash values, decision counts and decisions with no grant_hash. "
+            "With --issuance, also lists credential issuances per tenant. Malformed lines are counted and reported; "
+            "exits 4 when any were found and 1 on an input error."
+        ),
+    )
+    inventory.add_argument("--audit", required=True, help="audit JSONL file")
+    inventory.add_argument("--issuance", help="credential injector issuance JSONL file")
+    inventory.set_defaults(func=_inventory)
 
     return parser
 
