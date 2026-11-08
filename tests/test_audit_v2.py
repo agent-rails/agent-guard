@@ -4,7 +4,7 @@ import json
 from dataclasses import replace
 
 from agent_guard import AuditRecord, JsonlAuditSink, MemoryAuditSink, SigningAuditSink
-from agent_guard.audit import _signable_body, record_dict, verify_record
+from agent_guard.audit import _signable_body, record_dict, sign_record, verify_record
 
 SECRET = b"audit-v2-test-secret"
 
@@ -93,3 +93,21 @@ def test_v1_signature_still_verifies_and_new_field_invalidates_it():
     signed = sink.records[0]
     assert verify_record(signed, SECRET)
     assert not verify_record(replace(signed, tenant_id="tenant-1"), SECRET)
+
+
+def _signed(record: AuditRecord) -> AuditRecord:
+    return replace(record, sig=sign_record(record, SECRET))
+
+
+def test_schema_version_must_be_1_or_2_and_match_evidence_fields():
+    assert verify_record(_signed(_record(**V2)), SECRET)
+    assert verify_record(_signed(_record()), SECRET)
+    assert verify_record(_signed(_record(schema_version=1)), SECRET)
+    for bad in (0, 3, "2", True, 2.0):
+        assert not verify_record(_signed(_record(**V2, schema_version=bad)), SECRET)
+        assert not verify_record(_signed(_record(schema_version=bad)), SECRET)
+
+
+def test_schema_version_must_agree_with_presence_of_v2_fields():
+    assert not verify_record(_signed(_record(schema_version=2)), SECRET)
+    assert not verify_record(_signed(_record(trace_id="t", schema_version=1)), SECRET)
