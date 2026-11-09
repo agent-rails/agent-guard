@@ -2,7 +2,7 @@
 
 Notable changes. This project follows [Semantic Versioning](https://semver.org). While on `0.x`, minor versions may include breaking changes (see Stability below).
 
-## [Unreleased]
+## [0.3.0] - Unreleased
 
 ### Added
 
@@ -18,6 +18,14 @@ Notable changes. This project follows [Semantic Versioning](https://semver.org).
 - Lifecycle fields are optional and excluded from the signed body when absent, preserving verification of existing per-record HMACs.
 - If persisting the release event fails, dispatch is not called and a best-effort terminal event with `outcome="not_dispatched"` and `executed=false` closes the release, so `unresolved_releases()` no longer reports a call that never ran. If that close-out write also fails, the release stays unresolved, which now means either possibly-applied or never dispatched.
 
+- `agent_guard.velocity`: optional per-agent, per-tool call-count limit over a sliding window (`VelocityLimiter`, `InMemoryVelocityLimiter`, `VelocityRule`), passed to `Guard` or `Guard.from_token`. Consulted only after policy, judge and any human approval allow the call; refused calls consume no budget; a limiter error denies (`rule_id` `velocity-limit`). Counters are in memory and reset on restart.
+- Audit v2 evidence fields: optional `trace_id`, `task_root`, `grant_hash`, `tenant_id`, `principal`, `actor`, `parent_actor`, `host` and `purpose`. Setting any stamps `schema_version` 2; unset fields are left out of the signed body, so existing records sign and verify as before. Spec: `docs/spec/evidence.md`.
+- `agentguard_identity.credentials.CredentialInjector`: mints a short-lived credential for one reserved operation after an allow decision, bound to the executor key, audience and request digest. Refuses when suspended, when the verdict is not allow, when the operation does not match its reservation or has expired, or when the secret is missing. Each `op_id` is claimed atomically and the issuance record (ids and hashes only) is written before minting, so a retry never mints twice.
+- Persistent suspend: `suspend(reason, actor)` writes state in an owner-only directory and survives a new injector instance; only the configured releaser can `resume`. Any state at the path, including corrupt or unreadable state, counts as suspended.
+- `guard inventory`: groups an audit log by actor and tenant, with an optional issuance log section. Malformed lines are counted and reported.
+- `guard detect`: deterministic per-persona checks of an evaluation window against a baseline (first use of a tool or resource, hourly rate above a multiple of baseline, activity outside configured UTC hours). Not imported by the decision path.
+- `agent_guard.alert_sink.AlertSink`: routes alerts to suspend, revoke a task or report only. Acts only on alerts with an HMAC from the configured writer key (a 0600 regular file); refuses stale and replayed alerts; cannot resume a suspension.
+
 ### Changed
 
 - **Breaking (0.x):** async tool functions and async dispatch callables are rejected with `AsyncDispatchError`. In 0.2.0 an `async def` tool wrapped by `@guarded` or `Guard.call` returned a coroutine that the caller could await, but its audit record claimed success before the body ran. There is no async surface yet; call async tools through your own boundary or wait for an `acall()`.
@@ -26,8 +34,15 @@ Notable changes. This project follows [Semantic Versioning](https://semver.org).
 - **Breaking (0.x):** `@guarded` binds positional arguments to the function's parameter names, so the policy, approver, digest and audit record cover them (previously positional arguments bypassed all four). The function now runs on the canonical copy, not the caller's objects: a mutable out-parameter is no longer written through, and a non-JSON argument such as a lock or socket is blocked. A keyword passed through `**kwargs` that shadows a positional-only parameter name raises `TypeError`. Omitted default values are bound too, so the policy sees what the tool will run with; a default that is not JSON-serializable blocks the call. Decorating an instance method or classmethod now blocks every call, because `self` and `cls` are not JSON; decorate a plain function instead. A `functools.partial` that freezes positional arguments is rejected at decoration time because those values would be invisible to the policy; bind them by keyword.
 - **Breaking (0.x):** one allowed call now produces two `executed=true` records (`release` and `terminal`). Consumers that count executions must filter on `event`.
 
+- **Breaking (0.x):** `Broker.mint()` takes `(attestor, attestation, ...)` and verifies the attestation itself. Passing an `AttestationResult` raises `TypeError`; a caller-built result could previously mint a top-tier token.
+- **Breaking (0.x):** `Guard` enforces a minted token's scopes before policy evaluation. A tool outside the scopes is denied; previously any tool the policy allowed ran.
+- **Breaking (0.x):** `guard run` exits with the command's own status when the tool fails (signals as 128+N), and the audit record carries the error. Previously a failed command was audited as successful and `guard run` exited 0.
+- `audit.verify_record` refuses a record whose `schema_version` is not absent, 1 or 2, or disagrees with whether v2 fields are present.
+
 ### Fixed
 
+- Identity and boundary hardening: `Token.verify()` raises `ValueError` instead of `KeyError`/`TypeError` on malformed signed payloads; `verify_pop()` no longer raises on a huge integer `iat`; `guard mcp` fails closed on a non-string tool name; `LLMJudge.parse_verdict()` fails closed on non-string output.
+- The missing-`cryptography` error and the example named `agentguard[pop]`; the package is published as `toolcall-authz`, so the hint now says `toolcall-authz[pop]`.
 - The Claude Code hook's starter `block-rm-rf` rule no longer reads a `--rm` flag as the `rm` command. `docker run --rm img pwsh -NoProfile` was denied because `\brm\b` matches after a hyphen and `-NoProfile` looks like a recursive force flag. A double-dash `--rm` that follows whitespace or a hyphen is now skipped; `rm` after a single hyphen (`${x:-rm}`, `git-rm`, `x-rm`) or a `--rm` glued to other text (`v=--rm`) is still matched. The rule remains a text pattern over the command, not command identification: a command word built at run time (variables, `eval`, functions, command substitution) can evade it, as it could before. The starter policy is written only when no policy file exists, so an existing policy file keeps the old pattern until it is edited or deleted and regenerated.
 - CLI: `guard run --outcome-file` could clear the configured policy file when both options referred to the same path, then fail while loading the now-missing policy. The CLI now rejects outcome/policy path aliases before clearing either file; direct, symlink, and hard link collisions leave the policy intact.
 - CLI: `guard run` and `guard explain` re-joined the command's argv with spaces before
@@ -150,7 +165,7 @@ Initial public release. (An earlier `v0.0.1` git tag existed but was never publi
 
 ## Stability
 
-- Public API is everything exported from `agent_guard` and `agentguard_identity` top-level packages.
-- On `0.x`: breaking changes may land in minor releases, called out here and in the release notes. Pin to `~=0.2.0` (or an exact version) if you need stability.
+- Public API is everything exported from `agent_guard` and `agentguard_identity` top-level packages, plus the names without a leading underscore in `agent_guard.alert_sink`, `agent_guard.detect`, `agent_guard.inventory` and `agentguard_identity.credentials`.
+- On `0.x`: breaking changes may land in minor releases, called out here and in the release notes. Pin to `~=0.3.0` (or an exact version) if you need stability.
 - At `1.0`: semver is enforced — breaking changes only in majors, with a deprecation period.
 - Ships PEP 561 type information (`py.typed`); downstream type-checkers see inline types.
