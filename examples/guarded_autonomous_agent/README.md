@@ -144,7 +144,7 @@ this injection, is that it didn't.
 ## Attribution
 
 The tool/provider seam (`Tool`, `ToolRegistry`, `AnthropicProvider`) is
-adapted from [voltagebots/agent-from-scratch](https://github.com/voltagebots/agent-from-scratch),
+adapted from [agent-rails/agent-from-scratch](https://github.com/agent-rails/agent-from-scratch),
 a small from-scratch agent loop built for teaching. Reproduced minimally here
 rather than added as a dependency, so this example stays self-contained --
 consistent with every other example in this directory.
