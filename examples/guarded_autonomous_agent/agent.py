@@ -7,7 +7,7 @@ genuinely decides its own tool calls by calling the Anthropic API -- not a
 fixture standing in for one.
 
 The tool/provider seam (Tool, ToolRegistry, AnthropicProvider) is adapted
-from https://github.com/voltagebots/agent-from-scratch (a small, from-scratch
+from https://github.com/agent-rails/agent-from-scratch (a small, from-scratch
 agent loop built for teaching, MIT-equivalent spirit, not vendored as a
 dependency -- reproduced minimally here so this example stays self-contained
 and zero-extra-git-clones, per this repo's existing example style). Only the
