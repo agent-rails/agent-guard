@@ -31,7 +31,7 @@ property, now proven against a real autonomous agent in a real container --
 the thing that was still missing.
 
 Prerequisites: same as agent.py, plus the [pop] extra:
-    pip install "agentguard[pop]"
+    pip install "toolcall-authz[pop]"
 
 Run:
     python examples/guarded_autonomous_agent/agent_pop.py

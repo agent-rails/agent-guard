@@ -86,7 +86,7 @@ usable without the matching private key) -- but only against a scripted
 autonomous agent in a real container.
 
 ```bash
-pip install "agentguard[pop]"
+pip install "toolcall-authz[pop]"
 python examples/guarded_autonomous_agent/agent_pop.py
 ```
 
