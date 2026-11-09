@@ -17,7 +17,7 @@ jobs:
       # Marks only. days-before-*-close: -1 disables automatic closing, so an
       # unattended bot can never close an outside contributor's work. Flip to a
       # positive number once the labels have been reviewed in practice.
-      - uses: actions/stale@v11
+      - uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
         with:
           days-before-pr-stale: 30
           days-before-pr-close: -1
