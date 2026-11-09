@@ -161,3 +161,13 @@ def test_cnf_cannot_be_stripped_to_downgrade_a_holder_bound_token_to_bearer():
 
     with pytest.raises(ValueError, match="signature invalid"):
         verify(downgraded, b"k")
+
+
+def test_missing_cryptography_names_the_published_distribution(monkeypatch):
+    import sys
+
+    from agentguard_identity.pop import _cryptography_ed25519
+
+    monkeypatch.setitem(sys.modules, "cryptography.hazmat.primitives.asymmetric.ed25519", None)
+    with pytest.raises(ImportError, match=r"pip install toolcall-authz\[pop\]"):
+        _cryptography_ed25519()

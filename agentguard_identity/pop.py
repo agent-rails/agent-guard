@@ -16,7 +16,7 @@ def _cryptography_ed25519():
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
     except ImportError as err:
         raise ImportError(
-            "proof-of-possession requires the 'cryptography' package; `pip install agentguard[pop]`"
+            "proof-of-possession requires the 'cryptography' package; `pip install toolcall-authz[pop]`"
         ) from err
     return Ed25519PrivateKey, Ed25519PublicKey, InvalidSignature
 
